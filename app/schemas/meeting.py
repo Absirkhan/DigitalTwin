@@ -29,6 +29,13 @@ class MeetingUpdate(BaseModel):
     status: Optional[str] = None
 
 
+class MeetingJoinRequest(BaseModel):
+    meeting_url: str
+    recording_config: Optional[Dict[str, Any]] = None
+    bot_name: Optional[str] = None
+    enable_realtime_processing: Optional[bool] = False
+
+
 class MeetingResponse(BaseModel):
     id: int
     title: str
@@ -46,6 +53,18 @@ class MeetingResponse(BaseModel):
     participants: Optional[List[str]]
     created_at: datetime
     updated_at: Optional[datetime]
+    bot_id: Optional[str] = None  # Added for Recall API response
 
     class Config:
         from_attributes = True
+
+
+class MeetingJoinResponse(BaseModel):
+    """Response for joining a meeting via Recall API"""
+    success: bool
+    message: str
+    bot_id: Optional[str] = None
+    status: Optional[str] = None
+    meeting_url: Optional[str] = None
+    bot_name: Optional[str] = None
+    error_details: Optional[Dict[str, Any]] = None

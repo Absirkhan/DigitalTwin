@@ -3,6 +3,7 @@ Application Configuration
 """
 
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 from typing import List
 
 
@@ -40,7 +41,8 @@ class Settings(BaseSettings):
     TEAMS_CLIENT_SECRET: str = ""
     
     # Recall AI
-    RECALL_AI_API_KEY: str = ""
+    RECALL_API_KEY: str = ""
+    RECALL_BASE_URL: str = ""
     
     # Voice Settings
     VOICE_MODEL_PATH: str = "models/voice/"
@@ -51,8 +53,7 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
     
-    class Config:
-        env_file = ".env"
+    model_config = ConfigDict(env_file=".env")
 
 
 settings = Settings()
