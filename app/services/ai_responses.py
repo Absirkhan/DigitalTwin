@@ -4,12 +4,30 @@ AI response generation service using RAG
 
 import openai
 from typing import List, Dict
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.llms import OpenAI
-from langchain.chains import RetrievalQA
-from langchain.document_loaders import TextLoader
+try:
+    # Try the newer LangChain imports first
+    from langchain_openai import OpenAIEmbeddings, OpenAI
+    from langchain_community.vectorstores import Chroma
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    from langchain.chains import RetrievalQA
+    from langchain_community.document_loaders import TextLoader
+except ImportError:
+    # Fallback to older imports if newer ones aren't available
+    try:
+        from langchain_community.embeddings import OpenAIEmbeddings
+        from langchain_community.llms import OpenAI
+        from langchain_community.vectorstores import Chroma
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        from langchain.chains import RetrievalQA
+        from langchain_community.document_loaders import TextLoader
+    except ImportError:
+        # Last resort fallback to basic imports
+        from langchain.embeddings.openai import OpenAIEmbeddings
+        from langchain.llms.openai import OpenAI
+        from langchain.vectorstores.chroma import Chroma
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        from langchain.chains import RetrievalQA
+        from langchain.document_loaders import TextLoader
 
 from app.core.config import settings
 from app.core.celery import celery_app

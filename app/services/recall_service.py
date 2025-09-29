@@ -1,118 +1,61 @@
-"""
-Recall API service for meeting bot integration
-"""
-
-import httpx
-from typing import Dict, Any, Optional
+from typing import Optional, Dict, Any, List
 from datetime import datetime
-from enum import Enum
-from pydantic import BaseModel
+import httpx
+import asyncio
 import os
+import aiohttp
+import tempfile
+import json
 
-from app.schemas.meeting import MeetingJoinRequest, MeetingJoinResponse
+#from app.services.cloudinary_service import upload_to_cloudinary
 from app.core.config import settings
+from app.schemas.meeting import (
+    MeetingJoinRequest,
+    MeetingResponse,
+    TranscriptDetailResponse,
+    MeetingPlatform,
+    MeetingStatus,
+    MeetingInfo,
+    TranscriptChunk
+)
+from app.models.meeting import Meeting
+from app.models.bot import Bot
 
 
-class MeetingStatus(str, Enum):
-    JOINING = "joining"
-    JOINED = "joined"
-    RECORDING = "recording"
-    LEFT = "left"
-    ERROR = "error"
-
-
-class MeetingInfo(BaseModel):
-    meeting_id: str
-    meeting_url: str
-    platform: str
-    status: MeetingStatus
-    bot_id: Optional[str] = None
-    created_at: datetime
-
-
-class RecallService:
+class RecallAPIService:
     def __init__(self):
-        # Try to get API key from environment directly as fallback
-        api_key = settings.RECALL_API_KEY or os.getenv('RECALL_API_KEY', '')
-        base_url = settings.RECALL_BASE_URL or os.getenv('RECALL_BASE_URL', 'https://api.recall.ai/api/v1')
-        
-        self.base_url = base_url
-        
-        # Debug logging for API key
-        print(f"DEBUG: RECALL_API_KEY from settings: {'***' + settings.RECALL_API_KEY[-4:] if settings.RECALL_API_KEY else 'None'}")
-        print(f"DEBUG: RECALL_API_KEY from env: {'***' + os.getenv('RECALL_API_KEY', '')[-4:] if os.getenv('RECALL_API_KEY') else 'None'}")
-        print(f"DEBUG: Final API key: {'***' + api_key[-4:] if api_key else 'None'}")
-        print(f"DEBUG: RECALL_BASE_URL: {self.base_url}")
-        print(f"DEBUG: Using Token authentication (not Bearer)")
-        
-        # Check if API key exists and is not empty
-        if not api_key or api_key.strip() == "":
-            print("WARNING: RECALL_API_KEY is empty or not set!")
-            
+        self.api_key = settings.RECALL_API_KEY
+        self.base_url = settings.RECALL_BASE_URL
         self.headers = {
-            "Authorization": f"Token {api_key}",
-            "Content-Type": "application/json"
+            "Authorization": f"Token {self.api_key}",
+            "Content-Type": "application/json",
         }
-        
-        print(f"DEBUG: Headers configured: Authorization=Token ***{api_key[-4:] if api_key else 'None'}")
 
-    def _detect_meeting_platform(self, meeting_url: str) -> str:
+    def _detect_meeting_platform(self, meeting_url: str) -> MeetingPlatform:
         """Detect meeting platform from URL"""
-        if "zoom.us" in meeting_url:
-            return "zoom"
-        elif "teams.microsoft.com" in meeting_url:
-            return "teams"
-        elif "meet.google.com" in meeting_url:
-            return "google_meet"
+        url_lower = meeting_url.lower()
+
+        if "zoom.us" in url_lower:
+            return MeetingPlatform.ZOOM
+        elif "meet.google.com" in url_lower:
+            return MeetingPlatform.GOOGLE_MEET
+        elif "teams.microsoft.com" in url_lower or "teams.live.com" in url_lower:
+            return MeetingPlatform.MICROSOFT_TEAMS
+        elif "webex.com" in url_lower:
+            return MeetingPlatform.WEBEX
         else:
-            return "unknown"
+            return MeetingPlatform.OTHER
 
-    async def test_authentication(self):
-        """Test authentication with the correct Token method"""
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                # Test with the Token authentication method
-                response = await client.get(
-                    f"{self.base_url}/bot",
-                    headers=self.headers
-                )
-                return {
-                    "auth_type": "Token",
-                    "status_code": response.status_code,
-                    "success": response.status_code == 200,
-                    "response_preview": response.text[:200] if response.text else ""
-                }
-        except Exception as e:
-            return {
-                "auth_type": "Token",
-                "error": str(e),
-                "success": False
-            }
-
-    async def join_meeting(self, request: MeetingJoinRequest):
+    async def join_meeting(self, request: MeetingJoinRequest) -> MeetingResponse:
         """Join a meeting using the Recall API with enhanced transcript and audio configuration"""
         try:
             # Prepare the payload for Recall API according to official documentation
             payload = {
                 "meeting_url": str(request.meeting_url),
                 "recording_config": {
-                    "transcript": {
-                        "provider": {
-                            "meeting_captions": {}
-                        }
-                    },
+                    "transcript": {"provider": {"meeting_captions": {}}},
                     "audio_mixed_raw": {},
                 },
-                "automatic_leave": {
-                    "silence_detection": {
-                        "timeout": 3600,
-                        "activate_after": 1200
-                    },
-                    "waiting_room_timeout": 60,
-                    "noone_joined_timeout": 600,
-                    "everyone_left_timeout": 2,
-                    "in_call_not_recording_timeout": 1200
-                }
             }
 
             # Add bot name if provided
@@ -120,13 +63,15 @@ class RecallService:
                 payload["bot_name"] = request.bot_name
 
             # Add real-time endpoints for live processing if needed
-            if (hasattr(request, "enable_realtime_processing") 
-                and request.enable_realtime_processing):
+            if (
+                hasattr(request, "enable_realtime_processing")
+                and request.enable_realtime_processing
+            ):
                 payload["recording_config"]["realtime_endpoints"] = [
                     {
                         "type": "websocket",
                         "config": {
-                            "url": f"{settings.RECALL_BASE_URL}/webhooks/realtime",
+                            "url": f"{settings.recall_base_url}/webhooks/realtime",
                             "events": [
                                 "transcript.data",  # Real-time transcript events
                                 "audio_mixed_raw.data",  # Real-time audio events
@@ -138,50 +83,41 @@ class RecallService:
             # Remove None values
             payload = {k: v for k, v in payload.items() if v is not None}
 
-            # Debug logging
-            print(f"DEBUG: Making request to {self.base_url}/bot")
-            print(f"DEBUG: Headers: {dict(self.headers)}")
-            print(f"DEBUG: Payload keys: {list(payload.keys())}")
-
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
-                    f"{self.base_url}/bot", 
-                    headers=self.headers, 
-                    json=payload
+                    f"{self.base_url}/bot", headers=self.headers, json=payload
                 )
-
                 # Check if response is successful
                 if response.status_code == 201:
                     try:
                         data = response.json()
+
                         meeting_info = MeetingInfo(
                             meeting_id=data.get("id", ""),
                             meeting_url=str(request.meeting_url),
-                            platform=self._detect_meeting_platform(str(request.meeting_url)),
+                            platform=self._detect_meeting_platform(
+                                str(request.meeting_url)
+                            ),
                             status=MeetingStatus.JOINING,
                             bot_id=data.get("id"),
                             created_at=datetime.utcnow(),
                         )
 
-                        # Return a proper MeetingJoinResponse object
-                        return MeetingJoinResponse(
-                            bot_id=data.get("id"),
-                            status='joining',
-                            meeting_url=str(request.meeting_url),
-                            bot_name=request.bot_name,
+                        return MeetingResponse(
                             success=True,
-                            message="Successfully initiated bot to join meeting"
+                            message="Successfully initiated bot to join meeting",
+                            meeting_info=meeting_info,
+                            bot_id=data.get("id"),
                         )
                     except ValueError as json_error:
-                        return MeetingJoinResponse(
+                        return MeetingResponse(
                             success=False,
                             message=f"Received successful response but failed to parse JSON: {str(json_error)}",
-                            bot_id=None,
                             error_details={
                                 "json_parse_error": str(json_error),
                                 "response_text": response.text,
                                 "status_code": response.status_code,
-                            }
+                            },
                         )
                 else:
                     # Try to parse error response as JSON, fallback to text
@@ -190,48 +126,973 @@ class RecallService:
                     except ValueError:
                         error_data = {"raw_response": response.text}
 
-                    return MeetingJoinResponse(
+                    return MeetingResponse(
                         success=False,
                         message=f"Failed to join meeting: HTTP {response.status_code}",
-                        bot_id=None,
                         error_details={
                             "status_code": response.status_code,
                             "response_data": error_data,
                             "response_text": response.text,
-                        }
+                        },
                     )
 
         except httpx.TimeoutException:
-            return MeetingJoinResponse(
+            return MeetingResponse(
                 success=False,
                 message="Request timed out - Recall API may be slow or unavailable",
-                bot_id=None,
-                error_details={"exception": "TimeoutException"}
+                error_details={"exception": "TimeoutException"},
             )
         except httpx.ConnectError:
-            return MeetingJoinResponse(
+            return MeetingResponse(
                 success=False,
                 message="Could not connect to Recall API - check network connectivity",
-                bot_id=None,
-                error_details={"exception": "ConnectError"}
+                error_details={"exception": "ConnectError"},
             )
         except Exception as e:
-            return MeetingJoinResponse(
+            return MeetingResponse(
                 success=False,
                 message=f"Unexpected error joining meeting: {str(e)}",
-                bot_id=None,
-                error_details={
-                    "exception": str(e), 
-                    "exception_type": type(e).__name__
-                }
+                error_details={"exception": str(e), "exception_type": type(e).__name__},
             )
 
+    async def get_bot_status(self, bot_id: str) -> Dict[str, Any]:
+        """Get the current status of a bot including transcript availability"""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/bot/{bot_id}", headers=self.headers
+                )
 
-# Create a global instance
-recall_service = RecallService()
+                if response.status_code == 200:
+                    try:
+                        bot_data = response.json()
 
+                        # Add transcript availability information
+                        bot_data["transcript_available"] = bool(
+                            bot_data.get("status") == "completed"
+                            and bot_data.get("transcript")
+                        )
 
-# Keep the old function for backward compatibility
-async def join_meeting(request: MeetingJoinRequest):
-    """Backward compatibility function"""
-    return await recall_service.join_meeting(request)
+                        # Add media shortcuts for accessing recordings
+                        if "media_shortcuts" in bot_data:
+                            bot_data["recording_urls"] = {
+                                "video": bot_data["media_shortcuts"]
+                                .get("video_mixed", {})
+                                .get("data", {})
+                                .get("download_url"),
+                                "audio": bot_data["media_shortcuts"]
+                                .get("audio_mixed", {})
+                                .get("data", {})
+                                .get("download_url"),
+                            }
+
+                        return bot_data
+                    except ValueError:
+                        return {
+                            "error": "Failed to parse response as JSON",
+                            "raw_response": response.text,
+                        }
+                else:
+                    return {
+                        "error": f"Failed to get bot status: {response.status_code}",
+                        "response_text": response.text,
+                    }
+
+        except Exception as e:
+            return {"error": f"Error getting bot status: {str(e)}"}
+
+    async def get_full_transcript(self, bot_id: str) -> Dict[str, Any]:
+        """
+        Get the complete stored transcript for a completed meeting
+        According to Recall docs, transcripts are stored with the bot data
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                # Get bot details which includes transcript data
+                response = await client.get(
+                    f"{self.base_url}/bot/{bot_id}", headers=self.headers
+                )
+
+                if response.status_code == 200:
+                    try:
+                        bot_data = response.json()
+
+                        # Extract transcript from bot data
+                        transcript_data = {
+                            "bot_id": bot_id,
+                            "status": bot_data.get("status"),
+                            "transcript": bot_data.get("transcript", []),
+                            "meeting_url": bot_data.get("meeting_url"),
+                            "created_at": bot_data.get("created_at"),
+                            "ended_at": bot_data.get("ended_at"),
+                            "duration": bot_data.get("duration"),
+                        }
+
+                        # Process transcript chunks if available
+                        processed_transcript = []
+                        for item in transcript_data["transcript"]:
+                            processed_transcript.append(
+                                {
+                                    "timestamp": item.get("timestamp"),
+                                    "speaker": item.get("speaker"),
+                                    "text": item.get("text"),
+                                    "confidence": item.get("confidence"),
+                                }
+                            )
+
+                        transcript_data["processed_transcript"] = processed_transcript
+                        transcript_data["total_chunks"] = len(processed_transcript)
+
+                        return transcript_data
+
+                    except ValueError as e:
+                        return {
+                            "error": "Failed to parse transcript JSON",
+                            "details": str(e),
+                            "raw_response": response.text,
+                        }
+                else:
+                    return {
+                        "error": f"Failed to get transcript: {response.status_code}",
+                        "response_text": response.text,
+                    }
+
+        except Exception as e:
+            return {"error": f"Error getting transcript: {str(e)}"}
+
+    async def store_transcript_locally(
+        self, bot_id: str, storage_path: str = "transcripts/"
+    ) -> Dict[str, Any]:
+        """
+        Retrieve and store transcript data locally for further processing
+        """
+        try:
+            # Get the full transcript from Recall
+            transcript_data = await self.get_full_transcript(bot_id)
+
+            if "error" in transcript_data:
+                return transcript_data
+
+            # Create storage directory if it doesn't exist
+            os.makedirs(storage_path, exist_ok=True)
+
+            # Save transcript as JSON file
+            filename = (
+                f"{bot_id}_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            )
+            filepath = os.path.join(storage_path, filename)
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(transcript_data, f, indent=2, ensure_ascii=False, default=str)
+
+            # Also save as plain text for easy reading
+            text_filename = (
+                f"{bot_id}_transcript_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            )
+            text_filepath = os.path.join(storage_path, text_filename)
+
+            with open(text_filepath, "w", encoding="utf-8") as f:
+                f.write(f"Meeting Transcript - Bot ID: {bot_id}\n")
+                f.write(f"Meeting URL: {transcript_data.get('meeting_url', 'N/A')}\n")
+                f.write(f"Created: {transcript_data.get('created_at', 'N/A')}\n")
+                f.write(f"Duration: {transcript_data.get('duration', 'N/A')} seconds\n")
+                f.write("=" * 80 + "\n\n")
+
+                for chunk in transcript_data.get("processed_transcript", []):
+                    timestamp = chunk.get("timestamp", "N/A")
+                    speaker = chunk.get("speaker", "Unknown")
+                    text = chunk.get("text", "")
+                    f.write(f"[{timestamp}] {speaker}: {text}\n")
+
+            return {
+                "success": True,
+                "json_file": filepath,
+                "text_file": text_filepath,
+                "total_chunks": transcript_data.get("total_chunks", 0),
+                "message": f"Transcript stored successfully for bot {bot_id}",
+            }
+
+        except Exception as e:
+            return {
+                "error": f"Error storing transcript locally: {str(e)}",
+                "bot_id": bot_id,
+            }
+
+    async def stop_bot(self, bot_id: str) -> Dict[str, Any]:
+        """Stop a bot and end the meeting recording"""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.delete(
+                    f"{self.base_url}/bot/{bot_id}", headers=self.headers
+                )
+
+                if response.status_code in [200, 204]:
+                    return {"success": True, "message": "Bot stopped successfully"}
+                else:
+                    return {
+                        "error": f"Failed to stop bot: {response.status_code}",
+                        "response_text": response.text,
+                    }
+
+        except Exception as e:
+            return {"error": f"Error stopping bot: {str(e)}"}
+
+    async def get_transcript(self, bot_id: str) -> List[TranscriptChunk]:
+        """Get the transcript for a completed meeting"""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/bot/{bot_id}/transcript", headers=self.headers
+                )
+
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        transcript_chunks = []
+
+                        for item in data.get("transcript", []):
+                            chunk = TranscriptChunk(
+                                timestamp=datetime.fromisoformat(
+                                    item.get("timestamp", "")
+                                ),
+                                speaker=item.get("speaker", "Unknown"),
+                                text=item.get("text", ""),
+                                confidence=item.get("confidence"),
+                            )
+                            transcript_chunks.append(chunk)
+
+                        return transcript_chunks
+                    except ValueError:
+                        print(f"Failed to parse transcript JSON: {response.text}")
+                        return []
+                else:
+                    print(
+                        f"Failed to get transcript: {response.status_code} - {response.text}"
+                    )
+                    return []
+
+        except Exception as e:
+            print(f"Error getting transcript: {str(e)}")
+            return []
+
+    async def list_bots(self) -> List[Dict[str, Any]]:
+        """List all bots"""
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/bot", headers=self.headers
+                )
+
+                if response.status_code == 200:
+                    try:
+                        return response.json().get("results", [])
+                    except ValueError:
+                        print(f"Failed to parse bots list JSON: {response.text}")
+                        return []
+                else:
+                    print(
+                        f"Failed to list bots: {response.status_code} - {response.text}"
+                    )
+                    return []
+
+        except Exception as e:
+            print(f"Error listing bots: {str(e)}")
+            return []
+
+    async def list_recordings(
+        self, bot_id: Optional[str] = None, limit: int = 50
+    ) -> Dict[str, Any]:
+        """
+        List recordings using the official recordings endpoint
+        https://docs.recall.ai/reference/recording_list
+        """
+        try:
+            params = {"limit": limit}
+            if bot_id:
+                params["bot_id"] = bot_id
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/recording/", headers=self.headers, params=params
+                )
+
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        return {
+                            "success": True,
+                            "recordings": data.get("results", []),
+                            "count": data.get("count", 0),
+                            "next": data.get("next"),
+                            "previous": data.get("previous"),
+                        }
+                    except ValueError as e:
+                        return {
+                            "error": "Failed to parse recordings JSON",
+                            "details": str(e),
+                            "raw_response": response.text,
+                        }
+                else:
+                    return {
+                        "error": f"Failed to list recordings: {response.status_code}",
+                        "response_text": response.text,
+                    }
+
+        except Exception as e:
+            return {"error": f"Error listing recordings: {str(e)}"}
+
+    async def list_transcripts(
+        self,
+        bot_id: Optional[str] = None,
+        recording_id: Optional[str] = None,
+        limit: int = 50,
+    ) -> Dict[str, Any]:
+        """
+        List transcripts using the official transcript endpoint
+        https://docs.recall.ai/reference/transcript_list
+        """
+        try:
+            params = {"limit": limit}
+            if bot_id:
+                params["bot_id"] = bot_id
+            if recording_id:
+                params["recording_id"] = recording_id
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/transcript/", headers=self.headers, params=params
+                )
+
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        return {
+                            "success": True,
+                            "transcripts": data.get("results", []),
+                            "count": data.get("count", 0),
+                            "next": data.get("next"),
+                            "previous": data.get("previous"),
+                        }
+                    except ValueError as e:
+                        return {
+                            "error": "Failed to parse transcripts JSON",
+                            "details": str(e),
+                            "raw_response": response.text,
+                        }
+                else:
+                    return {
+                        "error": f"Failed to list transcripts: {response.status_code}",
+                        "response_text": response.text,
+                    }
+
+        except Exception as e:
+            return {"error": f"Error listing transcripts: {str(e)}"}
+
+    async def get_transcript_by_id(self, transcript_id: str) -> Dict[str, Any]:
+        """
+        Retrieve a specific transcript by ID using the official endpoint
+        https://docs.recall.ai/reference/transcript_retrieve
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/transcript/{transcript_id}/", headers=self.headers
+                )
+
+                if response.status_code == 200:
+                    try:
+                        transcript_data = response.json()
+
+                        # Process transcript chunks for easier use
+                        processed_chunks = []
+                        transcript_words = transcript_data.get("words", [])
+
+                        for word in transcript_words:
+                            processed_chunks.append(
+                                {
+                                    "start": word.get("start"),
+                                    "end": word.get("end"),
+                                    "text": word.get("text"),
+                                    "speaker": word.get("speaker"),
+                                    "confidence": word.get("confidence"),
+                                }
+                            )
+
+                        return {
+                            "success": True,
+                            "transcript_id": transcript_id,
+                            "transcript_data": transcript_data,
+                            "processed_chunks": processed_chunks,
+                            "total_words": len(transcript_words),
+                            "duration": transcript_data.get("duration"),
+                            "status": transcript_data.get("status"),
+                        }
+
+                    except ValueError as e:
+                        return {
+                            "error": "Failed to parse transcript JSON",
+                            "details": str(e),
+                            "raw_response": response.text,
+                        }
+                else:
+                    return {
+                        "error": f"Failed to get transcript: {response.status_code}",
+                        "response_text": response.text,
+                    }
+
+        except Exception as e:
+            return {"error": f"Error getting transcript: {str(e)}"}
+
+    async def list_meeting_metadata(
+        self, bot_id: Optional[str] = None, limit: int = 50
+    ) -> Dict[str, Any]:
+        """
+        List meeting metadata using the official meeting_metadata endpoint
+        https://docs.recall.ai/reference/meeting_metadata_list
+        """
+        try:
+            params = {"limit": limit}
+            if bot_id:
+                params["bot_id"] = bot_id
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/meeting_metadata/",
+                    headers=self.headers,
+                    params=params,
+                )
+
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        return {
+                            "success": True,
+                            "meeting_metadata": data.get("results", []),
+                            "count": data.get("count", 0),
+                            "next": data.get("next"),
+                            "previous": data.get("previous"),
+                        }
+                    except ValueError as e:
+                        return {
+                            "error": "Failed to parse meeting metadata JSON",
+                            "details": str(e),
+                            "raw_response": response.text,
+                        }
+                else:
+                    return {
+                        "error": f"Failed to list meeting metadata: {response.status_code}",
+                        "response_text": response.text,
+                    }
+
+        except Exception as e:
+            return {"error": f"Error listing meeting metadata: {str(e)}"}
+
+    async def get_meeting_metadata_by_id(self, metadata_id: str) -> Dict[str, Any]:
+        """
+        Retrieve specific meeting metadata by ID
+        https://docs.recall.ai/reference/meeting_metadata_retrieve
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/meeting_metadata/{metadata_id}/",
+                    headers=self.headers,
+                )
+
+                if response.status_code == 200:
+                    try:
+                        metadata = response.json()
+                        return {
+                            "success": True,
+                            "metadata_id": metadata_id,
+                            "meeting_metadata": metadata,
+                            "participants": metadata.get("participants", []),
+                            "title": metadata.get("title"),
+                            "start_time": metadata.get("start_time"),
+                            "end_time": metadata.get("end_time"),
+                        }
+                    except ValueError as e:
+                        return {
+                            "error": "Failed to parse meeting metadata JSON",
+                            "details": str(e),
+                            "raw_response": response.text,
+                        }
+                else:
+                    return {
+                        "error": f"Failed to get meeting metadata: {response.status_code}",
+                        "response_text": response.text,
+                    }
+
+        except Exception as e:
+            return {"error": f"Error getting meeting metadata: {str(e)}"}
+
+    async def get_comprehensive_meeting_data(self, bot_id: str) -> Dict[str, Any]:
+        """
+        Get comprehensive meeting data using all official endpoints
+        Combines recordings, transcripts, and metadata for a complete picture
+        """
+        try:
+            # Get all data in parallel for better performance
+            recordings_task = self.list_recordings(bot_id=bot_id)
+            transcripts_task = self.list_transcripts(bot_id=bot_id)
+            metadata_task = self.list_meeting_metadata(bot_id=bot_id)
+            bot_status_task = self.get_bot_status(bot_id)
+            # Wait for all tasks to complete
+            (
+                recordings_result,
+                transcripts_result,
+                metadata_result,
+                bot_status,
+            ) = await asyncio.gather(
+                recordings_task,
+                transcripts_task,
+                metadata_task,
+                bot_status_task,
+                return_exceptions=True,
+            )
+            # Compile comprehensive data
+            comprehensive_data = {
+                "bot_id": bot_id,
+                "success": True,
+                "data_retrieved_at": datetime.utcnow().isoformat(),
+            }
+            # Add bot status
+            if not isinstance(bot_status, Exception) and "error" not in bot_status:
+                comprehensive_data["bot_status"] = bot_status
+            else:
+                comprehensive_data["bot_status_error"] = str(bot_status)
+            # Add recordings data
+            if not isinstance(recordings_result, Exception) and recordings_result.get("success"):
+                comprehensive_data["recordings"] = recordings_result["recordings"]
+                comprehensive_data["recordings_count"] = recordings_result["count"]
+                
+                # Cloudinary Upload Integration
+                first_recording = recordings_result["recordings"][0] if recordings_result["recordings"] else None
+                if first_recording:
+                    download_url = first_recording.get("download_url")
+                    if download_url:
+                        tmp_path = None
+                        try:
+                            # Validate URL format
+                            if not download_url.startswith(('http://', 'https://')):
+                                raise ValueError("Invalid download URL format")
+                            
+                            async with aiohttp.ClientSession() as session, \
+                                     session.get(download_url) as video_resp:
+                                video_resp.raise_for_status()  # Raise on HTTP errors
+                                video_bytes = await video_resp.read()
+                                
+                                with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp_file:
+                                    tmp_file.write(video_bytes)
+                                    tmp_path = tmp_file.name
+                            
+                            # Upload to Cloudinary (commented out - service not available)
+                            # upload_result = upload_to_cloudinary(tmp_path)
+                            # if upload_result.get("success"):
+                            #     comprehensive_data["cloudinary_video_url"] = upload_result["url"]
+                            # else:
+                            #     comprehensive_data["cloudinary_upload_error"] = upload_result.get("error")
+                            comprehensive_data["cloudinary_upload_error"] = "Cloudinary service not configured"
+                        except aiohttp.ClientError as e:
+                            comprehensive_data["cloudinary_upload_error"] = f"Download failed: {str(e)}"
+                        except Exception as e:
+                            comprehensive_data["cloudinary_upload_error"] = str(e)
+                        finally:
+                            # Ensure temp file is always cleaned up
+                            if tmp_path and os.path.exists(tmp_path):
+                                os.remove(tmp_path)
+                    else:
+                        comprehensive_data["cloudinary_upload_error"] = "No download URL available."
+                else:
+                    comprehensive_data["cloudinary_upload_error"] = "No recordings available to upload."
+
+            # Add transcripts data
+            if not isinstance(transcripts_result, Exception) and transcripts_result.get("success"):
+                comprehensive_data["transcripts"] = transcripts_result["transcripts"]
+                comprehensive_data["transcripts_count"] = transcripts_result["count"]
+                # If we have transcripts, get detailed data for the first one
+                if transcripts_result["transcripts"]:
+                    first_transcript = transcripts_result["transcripts"][0]
+                    transcript_id = first_transcript.get("id")
+                    if transcript_id:
+                        detailed_transcript = await self.get_transcript_by_id(transcript_id)
+                        if detailed_transcript.get("success"):
+                            comprehensive_data["detailed_transcript"] = detailed_transcript
+            else:
+                comprehensive_data["transcripts_error"] = str(transcripts_result)
+            # Add meeting metadata
+            if not isinstance(metadata_result, Exception) and metadata_result.get("success"):
+                comprehensive_data["meeting_metadata"] = metadata_result["meeting_metadata"]
+                comprehensive_data["metadata_count"] = metadata_result["count"]
+                # If we have metadata, get detailed data for the first one
+                if metadata_result["meeting_metadata"]:
+                    first_metadata = metadata_result["meeting_metadata"][0]
+                    metadata_id = first_metadata.get("id")
+                    if metadata_id:
+                        detailed_metadata = await self.get_meeting_metadata_by_id(metadata_id)
+                        if detailed_metadata.get("success"):
+                            comprehensive_data["detailed_metadata"] = detailed_metadata
+            else:
+                comprehensive_data["metadata_error"] = str(metadata_result)
+            return comprehensive_data
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Error getting comprehensive meeting data: {str(e)}",
+                "bot_id": bot_id,
+            } 
+        
+        
+    # async def get_comprehensive_meeting_data(self, bot_id: str) -> Dict[str, Any]:
+    #     """
+    #     Get comprehensive meeting data using all official endpoints
+    #     Combines recordings, transcripts, and metadata for a complete picture
+    #     """
+    #     try:
+    #         # Get all data in parallel for better performance
+    #         recordings_task = self.list_recordings(bot_id=bot_id)
+    #         transcripts_task = self.list_transcripts(bot_id=bot_id)
+    #         metadata_task = self.list_meeting_metadata(bot_id=bot_id)
+    #         bot_status_task = self.get_bot_status(bot_id)
+
+    #         # Wait for all tasks to complete
+    #         (
+    #             recordings_result,
+    #             transcripts_result,
+    #             metadata_result,
+    #             bot_status,
+    #         ) = await asyncio.gather(
+    #             recordings_task,
+    #             transcripts_task,
+    #             metadata_task,
+    #             bot_status_task,
+    #             return_exceptions=True,
+    #         )
+
+    #         # Compile comprehensive data
+    #         comprehensive_data = {
+    #             "bot_id": bot_id,
+    #             "success": True,
+    #             "data_retrieved_at": datetime.utcnow().isoformat(),
+    #         }
+
+    #         # Add bot status
+    #         if not isinstance(bot_status, Exception) and "error" not in bot_status:
+    #             comprehensive_data["bot_status"] = bot_status
+    #         else:
+    #             comprehensive_data["bot_status_error"] = str(bot_status)
+
+    #         # Add recordings data
+    #         if not isinstance(recordings_result, Exception) and recordings_result.get(
+    #             "success"
+    #         ):
+    #             comprehensive_data["recordings"] = recordings_result["recordings"]
+    #             comprehensive_data["recordings_count"] = recordings_result["count"]
+    #         else:
+    #             comprehensive_data["recordings_error"] = str(recordings_result)
+
+    #         # Add transcripts data
+    #         if not isinstance(transcripts_result, Exception) and transcripts_result.get(
+    #             "success"
+    #         ):
+    #             comprehensive_data["transcripts"] = transcripts_result["transcripts"]
+    #             comprehensive_data["transcripts_count"] = transcripts_result["count"]
+
+    #             # If we have transcripts, get detailed data for the first one
+    #             if transcripts_result["transcripts"]:
+    #                 first_transcript = transcripts_result["transcripts"][0]
+    #                 transcript_id = first_transcript.get("id")
+    #                 if transcript_id:
+    #                     detailed_transcript = await self.get_transcript_by_id(
+    #                         transcript_id
+    #                     )
+    #                     if detailed_transcript.get("success"):
+    #                         comprehensive_data["detailed_transcript"] = (
+    #                             detailed_transcript
+    #                         )
+    #         else:
+    #             comprehensive_data["transcripts_error"] = str(transcripts_result)
+
+    #         # Add meeting metadata
+    #         if not isinstance(metadata_result, Exception) and metadata_result.get(
+    #             "success"
+    #         ):
+    #             comprehensive_data["meeting_metadata"] = metadata_result[
+    #                 "meeting_metadata"
+    #             ]
+    #             comprehensive_data["metadata_count"] = metadata_result["count"]
+
+    #             # If we have metadata, get detailed data for the first one
+    #             if metadata_result["meeting_metadata"]:
+    #                 first_metadata = metadata_result["meeting_metadata"][0]
+    #                 metadata_id = first_metadata.get("id")
+    #                 if metadata_id:
+    #                     detailed_metadata = await self.get_meeting_metadata_by_id(
+    #                         metadata_id
+    #                     )
+    #                     if detailed_metadata.get("success"):
+    #                         comprehensive_data["detailed_metadata"] = detailed_metadata
+    #         else:
+    #             comprehensive_data["metadata_error"] = str(metadata_result)
+
+    #         return comprehensive_data
+
+    #     except Exception as e:
+    #         return {
+    #             "success": False,
+    #             "error": f"Error getting comprehensive meeting data: {str(e)}",
+    #             "bot_id": bot_id,
+    #         }
+
+    async def store_comprehensive_transcript(
+        self, bot_id: str, storage_path: str = "transcripts/"
+    ) -> Dict[str, Any]:
+        """
+        Enhanced transcript storage using official endpoints
+        Combines transcript data with recordings and metadata
+        """
+        try:
+            # Get comprehensive data using official endpoints
+            comprehensive_data = await self.get_comprehensive_meeting_data(bot_id)
+
+            if not comprehensive_data.get("success"):
+                return comprehensive_data
+
+            # Create storage directory
+            os.makedirs(storage_path, exist_ok=True)
+
+            # Generate filenames with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base_filename = f"{bot_id}_comprehensive_{timestamp}"
+
+            # Save comprehensive data as JSON
+            json_filepath = os.path.join(storage_path, f"{base_filename}.json")
+            with open(json_filepath, "w", encoding="utf-8") as f:
+                json.dump(
+                    comprehensive_data, f, indent=2, ensure_ascii=False, default=str
+                )
+
+            # Create human-readable transcript if available
+            text_filepath = None
+            if "detailed_transcript" in comprehensive_data:
+                text_filepath = os.path.join(storage_path, f"{base_filename}.txt")
+                transcript_data = comprehensive_data["detailed_transcript"]
+
+                with open(text_filepath, "w", encoding="utf-8") as f:
+                    f.write(f"Comprehensive Meeting Data - Bot ID: {bot_id}\n")
+                    f.write(f"Retrieved: {comprehensive_data['data_retrieved_at']}\n")
+                    f.write("=" * 80 + "\n\n")
+
+                    # Add metadata if available
+                    if "detailed_metadata" in comprehensive_data:
+                        metadata = comprehensive_data["detailed_metadata"][
+                            "meeting_metadata"
+                        ]
+                        f.write(f"Meeting Title: {metadata.get('title', 'N/A')}\n")
+                        f.write(f"Start Time: {metadata.get('start_time', 'N/A')}\n")
+                        f.write(f"End Time: {metadata.get('end_time', 'N/A')}\n")
+                        f.write(
+                            f"Participants: {len(metadata.get('participants', []))}\n"
+                        )
+                        f.write("-" * 80 + "\n\n")
+
+                    # Add transcript content
+                    f.write("TRANSCRIPT:\n")
+                    f.write("-" * 40 + "\n")
+
+                    processed_chunks = transcript_data.get("processed_chunks", [])
+                    for chunk in processed_chunks:
+                        start_time = chunk.get("start", "N/A")
+                        speaker = chunk.get("speaker", "Unknown")
+                        text = chunk.get("text", "")
+                        f.write(f"[{start_time}s] {speaker}: {text}\n")
+
+            return {
+                "success": True,
+                "bot_id": bot_id,
+                "json_file": json_filepath,
+                "text_file": text_filepath,
+                "comprehensive_data": True,
+                "recordings_count": comprehensive_data.get("recordings_count", 0),
+                "transcripts_count": comprehensive_data.get("transcripts_count", 0),
+                "metadata_count": comprehensive_data.get("metadata_count", 0),
+                "message": f"Comprehensive meeting data stored for bot {bot_id}",
+            }
+
+        except Exception as e:
+            return {
+                "error": f"Error storing comprehensive transcript: {str(e)}",
+                "bot_id": bot_id,
+            }
+
+    async def fetch_and_format_transcript_from_url(self, download_url: str) -> Dict[str, Any]:
+        """
+        Fetch transcript data from download URL and format it in a readable way
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(download_url)
+                
+                if response.status_code != 200:
+                    return {
+                        "success": False,
+                        "error": f"Failed to fetch transcript: HTTP {response.status_code}",
+                        "download_url": download_url
+                    }
+                
+                # Parse the JSON response
+                try:
+                    raw_transcript_data = response.json()
+                except json.JSONDecodeError as e:
+                    return {
+                        "success": False,
+                        "error": f"Failed to parse transcript JSON: {str(e)}",
+                        "raw_response": response.text[:500]
+                    }
+                
+                # Format the transcript data
+                formatted_transcript = self._format_transcript_data(raw_transcript_data)
+                
+                return {
+                    "success": True,
+                    "download_url": download_url,
+                    "raw_transcript": raw_transcript_data,
+                    "formatted_transcript": formatted_transcript,
+                    "statistics": self._calculate_transcript_statistics(raw_transcript_data)
+                }
+                
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Error fetching transcript: {str(e)}",
+                "download_url": download_url
+            }
+    
+    def _format_transcript_data(self, raw_data: List[Dict]) -> Dict[str, Any]:
+        """
+        Format raw transcript data into a readable structure
+        """
+        formatted_chunks = []
+        continuous_text = []
+        participants = {}
+        
+        for chunk in raw_data:
+            participant_info = chunk.get("participant", {})
+            participant_id = participant_info.get("id")
+            participant_name = participant_info.get("name", "Unknown")
+            is_host = participant_info.get("is_host", False)
+            
+            # Track unique participants
+            if participant_id not in participants:
+                participants[participant_id] = {
+                    "name": participant_name,
+                    "is_host": is_host,
+                    "platform": participant_info.get("platform", "unknown"),
+                    "total_words": 0,
+                    "total_speaking_time": 0.0
+                }
+            
+            # Process words in this chunk
+            words = chunk.get("words", [])
+            for word_info in words:
+                text = word_info.get("text", "")
+                start_time = word_info.get("start_timestamp", {})
+                end_time = word_info.get("end_timestamp", {})
+
+                start_relative = start_time.get("relative", 0)
+                end_relative = end_time.get("relative", 0)
+                start_absolute = start_time.get("absolute", "")
+                end_absolute = end_time.get("absolute", "")
+                
+                # Format timestamps
+                start_formatted = self._format_timestamp(start_relative)
+                end_formatted = self._format_timestamp(end_relative)
+                duration = end_relative - start_relative
+                
+                formatted_chunk = {
+                    "participant_id": participant_id,
+                    "participant_name": participant_name,
+                    "is_host": is_host,
+                    "text": text,
+                    "start_time": start_formatted,
+                    "end_time": end_formatted,
+                    "duration": f"{duration:.2f}s",
+                    "start_relative": start_relative,
+                    "end_relative": end_relative,
+                    "start_absolute": start_absolute,
+                    "end_absolute": end_absolute
+                }
+                
+                formatted_chunks.append(formatted_chunk)
+                
+                # Update participant statistics
+                participants[participant_id]["total_words"] += len(text.split())
+                participants[participant_id]["total_speaking_time"] += duration
+                
+                # Add to continuous text
+                continuous_text.append(f"[{start_formatted}] {participant_name}: {text}")
+        
+        # Sort chunks by start time
+        formatted_chunks.sort(key=lambda x: x["start_relative"])
+        
+        return {
+            "chunks": formatted_chunks,
+            "continuous_text": "\n".join(continuous_text),
+            "participants": participants,
+            "total_chunks": len(formatted_chunks)
+        }
+    
+    def _calculate_transcript_statistics(self, raw_data: List[Dict]) -> Dict[str, Any]:
+        """
+        Calculate statistics from the transcript data
+        """
+        if not raw_data:
+            return {}
+        
+        total_words = 0
+        total_duration = 0.0
+        participants_count = set()
+        earliest_time = None
+        latest_time = None
+        
+        for chunk in raw_data:
+            participant_id = chunk.get("participant", {}).get("id")
+            if participant_id:
+                participants_count.add(participant_id)
+            
+            words = chunk.get("words", [])
+            for word_info in words:
+                # Count words
+                text = word_info.get("text", "")
+                total_words += len(text.split())
+                
+                # Calculate duration
+                start_time = word_info.get("start_timestamp", {}).get("relative", 0)
+                end_time = word_info.get("end_timestamp", {}).get("relative", 0)
+                
+                if earliest_time is None or start_time < earliest_time:
+                    earliest_time = start_time
+                if latest_time is None or end_time > latest_time:
+                    latest_time = end_time
+        
+        if earliest_time is not None and latest_time is not None:
+            total_duration = latest_time - earliest_time
+        
+        return {
+            "total_words": total_words,
+            "total_duration_seconds": total_duration,
+            "total_duration_formatted": self._format_timestamp(total_duration),
+            "participants_count": len(participants_count),
+            "words_per_minute": round((total_words / (total_duration / 60)) if total_duration > 0 else 0, 2)
+        }
+    
+    def _format_timestamp(self, seconds: float) -> str:
+        """
+        Format seconds into MM:SS format
+        """
+        minutes = int(seconds // 60)
+        remaining_seconds = int(seconds % 60)
+        return f"{minutes:02d}:{remaining_seconds:02d}"
+
+# Global service instance
+recall_service = RecallAPIService()
