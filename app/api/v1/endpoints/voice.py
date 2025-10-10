@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.core.database import get_db
-from app.services.auth import get_current_user
+from app.services.auth import get_current_user_bearer
 from app.services.voice import (
     process_audio_upload,
     generate_voice_response
@@ -21,7 +21,7 @@ router = APIRouter()
 @router.post("/upload")
 async def upload_voice_sample(
     audio_file: UploadFile = File(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Upload voice sample for training"""
@@ -32,7 +32,7 @@ async def upload_voice_sample(
 async def generate_voice(
     text: str,
     twin_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Generate voice response using digital twin's voice model"""
@@ -44,11 +44,12 @@ async def generate_voice(
     )
 
 
-@router.get("/samples/{twin_id}")
-async def get_twin_voice_samples(
-    twin_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get voice samples for a digital twin"""
-    return await get_voice_samples(db, twin_id, current_user.id)
+# @router.get("/samples/{twin_id}")
+# async def get_twin_voice_samples(
+#     twin_id: int,
+#     current_user: User = Depends(get_current_user_bearer),
+#     db: Session = Depends(get_db)
+# ):
+#     """Get voice samples for a digital twin"""
+#     # TODO: Implement get_voice_samples function in voice service
+#     return {"message": "Voice samples endpoint not yet implemented"}

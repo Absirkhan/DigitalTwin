@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_SECRET: str = ""
     GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
     
+    # Webhook Configuration
+    WEBHOOK_BASE_URL: str = "http://localhost:8000"
+    
     # Meeting Platforms
     ZOOM_CLIENT_ID: str = ""
     ZOOM_CLIENT_SECRET: str = ""
