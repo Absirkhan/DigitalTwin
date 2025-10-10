@@ -27,24 +27,24 @@ async def process_audio_upload(db: Session, audio_file: UploadFile, user_id: int
         content = await audio_file.read()
         buffer.write(content)
     
-    # Create database record
-    db_sample = VoiceSample(
-        filename=audio_file.filename,
-        file_path=file_path,
-        user_id=user_id,
-        processed="pending"
-    )
-    db.add(db_sample)
-    db.commit()
-    db.refresh(db_sample)
+    # TODO: Create database record when VoiceSample model is implemented
+    # db_sample = VoiceSample(
+    #     filename=audio_file.filename,
+    #     file_path=file_path,
+    #     user_id=user_id,
+    #     processed="pending"
+    # )
+    # db.add(db_sample)
+    # db.commit()
+    # db.refresh(db_sample)
     
-    # Start processing
-    #task = process_voice_sample.delay(file_path, None)  # No twin_id for general upload
+    # TODO: Start processing when Celery task is implemented
+    # task = process_voice_sample.delay(file_path, None)  # No twin_id for general upload
     
     return {
-        "sample_id": db_sample.id,
-        "task_id": task.id,
-        "status": "processing"
+        "filename": audio_file.filename,
+        "file_path": file_path,
+        "status": "uploaded"
     }
 
 

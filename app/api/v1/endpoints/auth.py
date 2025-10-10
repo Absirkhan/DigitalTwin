@@ -13,7 +13,6 @@ from app.services.auth import (
     exchange_code_for_tokens,
     create_or_update_user_from_google,
     create_access_token,
-    get_current_user,
     get_current_user_bearer,
     refresh_google_tokens
 )
@@ -118,7 +117,7 @@ async def get_current_user_info(current_user = Depends(get_current_user_bearer))
 
 
 @router.post("/refresh-tokens", response_model=dict)
-async def refresh_tokens(current_user = Depends(get_current_user), db: Session = Depends(get_db)):
+async def refresh_tokens(current_user = Depends(get_current_user_bearer), db: Session = Depends(get_db)):
     """Refresh Google OAuth tokens"""
     try:
         tokens = await refresh_google_tokens(db, current_user)
@@ -131,6 +130,6 @@ async def refresh_tokens(current_user = Depends(get_current_user), db: Session =
 
 
 @router.post("/logout")
-async def logout(current_user = Depends(get_current_user)):
+async def logout(current_user = Depends(get_current_user_bearer)):
     """Logout user (client should delete the token)"""
     return {"message": "Logged out successfully"}

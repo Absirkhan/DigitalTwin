@@ -13,7 +13,7 @@ from app.schemas.meeting import (
     MeetingCreate, MeetingResponse, MeetingUpdate, MeetingJoinRequest, MeetingJoinResponse,
     MeetingTranscriptRequest, MeetingTranscriptResponse, TranscriptGetResponse, TranscriptDetailResponse
 )
-from app.services.auth import get_current_user
+from app.services.auth import get_current_user_bearer
 from app.services.meeting import (
     create_meeting,
     get_user_meetings,
@@ -60,7 +60,6 @@ async def test_recall_auth():
 @router.post("/", response_model=MeetingResponse)
 async def create_meeting_schedule(
     meeting: MeetingCreate,
-    # current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Schedule a meeting for digital twin attendance"""
@@ -70,7 +69,6 @@ async def create_meeting_schedule(
 
 @router.get("/", response_model=List[MeetingResponse])
 async def get_my_meetings(
-    # current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all meetings for current user"""
@@ -81,7 +79,6 @@ async def get_my_meetings(
 @router.get("/{meeting_id}", response_model=MeetingResponse)
 async def get_meeting_details(
     meeting_id: int,
-    # current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get specific meeting details"""
@@ -96,7 +93,6 @@ async def get_meeting_details(
 async def update_meeting_schedule(
     meeting_id: int,
     meeting_update: MeetingUpdate,
-    # current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Update meeting schedule"""
@@ -107,7 +103,6 @@ async def update_meeting_schedule(
 @router.delete("/{meeting_id}")
 async def delete_meeting_schedule(
     meeting_id: int,
-    # current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Delete meeting schedule"""
@@ -120,7 +115,6 @@ async def delete_meeting_schedule(
 async def join_meeting(
     meeting_id: int,
     twin_id: int,
-    # current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Join meeting with digital twin"""
@@ -131,8 +125,7 @@ async def join_meeting(
 @router.post("/join", response_model=MeetingJoinResponse)
 async def join_meeting_with_url(
     request: MeetingJoinRequest,
-    db: Session = Depends(get_db),
-    # current_user: User = Depends(get_current_user)
+    db: Session = Depends(get_db)
 ):
     """Join a meeting using the Recall API and save the bot to the database."""
     try:
@@ -298,7 +291,6 @@ async def receive_meeting_transcript(
 @router.get("/transcript/{bot_id}")
 async def get_meeting_transcript(
     bot_id: str,
-    # current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get the transcript for a meeting by bot ID"""
@@ -346,7 +338,6 @@ async def get_meeting_transcript(
 @router.get("/{meeting_id}/transcript")
 async def get_meeting_transcript_by_meeting_id(
     meeting_id: int,
-    # current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get the transcript for a specific meeting by meeting ID"""
@@ -388,7 +379,6 @@ async def get_meeting_transcript_by_meeting_id(
 
 @router.get("/transcripts/all")
 async def get_all_transcripts(
-    # current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all meetings with transcripts for the current user"""
