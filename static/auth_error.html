@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authentication Error</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .error {
+            color: #dc3545;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .error-details {
+            background: #f8d7da;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #dc3545;
+            margin: 20px 0;
+        }
+        .retry-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin-top: 10px;
+        }
+        .retry-btn:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="error">
+            <h1>❌ Authentication Error</h1>
+            <p>There was an error during the authentication process.</p>
+        </div>
+
+        <div class="error-details">
+            <h4>Error Details:</h4>
+            <p id="errorMessage">
+                <!-- Error message will be inserted here by JavaScript -->
+            </p>
+        </div>
+
+        <div style="text-align: center;">
+            <a href="/api/v1/auth/google/login" class="retry-btn">Try Again</a>
+        </div>
+    </div>
+
+    <script>
+        // Get error from URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const error = urlParams.get('error');
+        
+        if (error) {
+            document.getElementById('errorMessage').textContent = decodeURIComponent(error);
+        } else {
+            document.getElementById('errorMessage').textContent = 'Unknown error occurred';
+        }
+    </script>
+</body>
+</html>

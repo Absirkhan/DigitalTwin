@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Digital Twin - Login</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 500px;
+            margin: 100px auto;
+            text-align: center;
+            background-color: #f5f5f5;
+        }
+        .login-container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .google-btn {
+            background-color: #4285f4;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            margin: 20px 0;
+        }
+        .google-btn:hover {
+            background-color: #3367d6;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .error {
+            color: red;
+            margin: 20px 0;
+        }
+        .success {
+            color: green;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>Digital Twin</h1>
+        <p>Sign in to access your digital twin dashboard</p>
+        
+        <div id="status"></div>
+        
+        <button class="google-btn" onclick="loginWithGoogle()">
+            <span>🔐</span> Sign in with Google
+        </button>
+        
+        <div id="user-info" style="display: none;">
+            <h3>Welcome!</h3>
+            <p id="user-name"></p>
+            <p id="user-email"></p>
+            <button onclick="logout()" style="margin-top: 20px;">Logout</button>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8000/api/v1';
+        
+        // Check if user is already logged in
+        window.onload = function() {
+            const token = localStorage.getItem('access_token');
+            if (token) {
+                checkToken(token);
+            }
+            
+            // Check for auth success/error in URL params
+            const urlParams = new URLSearchParams(window.location.search);
+            const token_param = urlParams.get('token');
+            const error = urlParams.get('error');
+            
+            if (token_param) {
+                localStorage.setItem('access_token', token_param);
+                checkToken(token_param);
+                // Clean URL
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } else if (error) {
+                document.getElementById('status').innerHTML = 
+                    '<div class="error">Authentication failed: ' + error + '</div>';
+            }
+        };
+        
+        async function loginWithGoogle() {
+            try {
+                const response = await fetch(`${API_BASE}/auth/google/login`);
+                const data = await response.json();
+                window.location.href = data.auth_url;
+            } catch (error) {
+                document.getElementById('status').innerHTML = 
+                    '<div class="error">Failed to start authentication</div>';
+            }
+        }
+        
+        async function checkToken(token) {
+            try {
+                const response = await fetch(`${API_BASE}/auth/me`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+                
+                if (response.ok) {
+                    const user = await response.json();
+                    showUserInfo(user);
+                } else {
+                    localStorage.removeItem('access_token');
+                    document.getElementById('status').innerHTML = 
+                        '<div class="error">Session expired</div>';
+                }
+            } catch (error) {
+                localStorage.removeItem('access_token');
+                document.getElementById('status').innerHTML = 
+                    '<div class="error">Failed to verify session</div>';
+            }
+        }
+        
+        function showUserInfo(user) {
+            document.querySelector('.google-btn').style.display = 'none';
+            document.getElementById('user-info').style.display = 'block';
+            document.getElementById('user-name').textContent = user.full_name;
+            document.getElementById('user-email').textContent = user.email;
+            document.getElementById('status').innerHTML = 
+                '<div class="success">Successfully authenticated!</div>';
+        }
+        
+        function logout() {
+            localStorage.removeItem('access_token');
+            document.querySelector('.google-btn').style.display = 'inline-block';
+            document.getElementById('user-info').style.display = 'none';
+            document.getElementById('status').innerHTML = '';
+        }
+    </script>
+</body>
+</html>

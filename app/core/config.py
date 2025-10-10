@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # OpenAI
     OPENAI_API_KEY: str = ""
     
+    # Google OAuth
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
+    
     # Meeting Platforms
     ZOOM_CLIENT_ID: str = ""
     ZOOM_CLIENT_SECRET: str = ""
