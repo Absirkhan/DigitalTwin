@@ -14,11 +14,14 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     email = Column(String, nullable=False, unique=True)
     full_name = Column(String)
-    google_id = Column(String)
-    credentials = Column(JSON)
-    bot_name = Column(String)
-    enable_backend_tasks = Column(Boolean)
+    google_id = Column(String, unique=True)
+    is_active = Column(Boolean, default=True)
     profile_picture = Column(String)
+    bot_name = Column(String)
+    enable_backend_tasks = Column(Boolean, default=True)
+    
+    # OAuth tokens stored as JSON
+    oauth_tokens = Column(JSON)
 
     # Relationships
     bots = relationship("Bot", back_populates="user")

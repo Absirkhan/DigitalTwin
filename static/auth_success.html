@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Authentication Success</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .success {
+            color: #28a745;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .token-container {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            border-left: 4px solid #007bff;
+            margin: 20px 0;
+        }
+        .token {
+            word-break: break-all;
+            background: #e9ecef;
+            padding: 10px;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 14px;
+        }
+        .copy-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        .copy-btn:hover {
+            background: #0056b3;
+        }
+        .instructions {
+            background: #d1ecf1;
+            padding: 15px;
+            border-radius: 5px;
+            border-left: 4px solid #bee5eb;
+            margin-top: 20px;
+        }
+        .endpoint-example {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            margin-top: 10px;
+            border: 1px solid #dee2e6;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="success">
+            <h1>✅ Authentication Successful!</h1>
+            <p>You have successfully logged in with Google.</p>
+        </div>
+
+        <div class="token-container">
+            <h3>Your Access Token:</h3>
+            <div class="token" id="accessToken">
+                <!-- Token will be inserted here by JavaScript -->
+            </div>
+            <button class="copy-btn" onclick="copyToken()">Copy Token</button>
+        </div>
+
+        <div class="instructions">
+            <h4>How to use this token:</h4>
+            <p>Include this token in the Authorization header of your API requests:</p>
+            <div class="endpoint-example">
+                Authorization: Bearer YOUR_TOKEN_HERE
+            </div>
+            
+            <p><strong>Example curl request to a protected endpoint:</strong></p>
+            <div class="endpoint-example">
+curl -H "Authorization: Bearer YOUR_TOKEN_HERE" \
+     http://localhost:8000/api/v1/auth/me
+            </div>
+
+            <p><strong>Test your authentication:</strong></p>
+            <div class="endpoint-example">
+curl -H "Authorization: Bearer YOUR_TOKEN_HERE" \
+     http://localhost:8000/api/v1/auth/me
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Get token from URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token');
+        
+        if (token) {
+            document.getElementById('accessToken').textContent = token;
+        } else {
+            document.getElementById('accessToken').textContent = 'No token found in URL';
+        }
+
+        function copyToken() {
+            const tokenElement = document.getElementById('accessToken');
+            const token = tokenElement.textContent;
+            
+            navigator.clipboard.writeText(token).then(function() {
+                alert('Token copied to clipboard!');
+            }, function(err) {
+                console.error('Could not copy text: ', err);
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = token;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                alert('Token copied to clipboard!');
+            });
+        }
+    </script>
+</body>
+</html>
