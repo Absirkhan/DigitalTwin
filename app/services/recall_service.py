@@ -11,11 +11,10 @@ import json
 from app.core.config import settings
 from app.schemas.meeting import (
     MeetingJoinRequest,
-    MeetingResponse,
+    MeetingJoinResponse,
     TranscriptDetailResponse,
     MeetingPlatform,
     MeetingStatus,
-    MeetingInfo,
     TranscriptChunk
 )
 from app.models.meeting import Meeting
@@ -46,7 +45,7 @@ class RecallAPIService:
         else:
             return MeetingPlatform.OTHER
 
-    async def join_meeting(self, request: MeetingJoinRequest) -> MeetingResponse:
+    async def join_meeting(self, request: MeetingJoinRequest) -> MeetingJoinResponse:
         """Join a meeting using the Recall API with enhanced transcript and audio configuration"""
         try:
             # Prepare the payload for Recall API according to official documentation
@@ -61,6 +60,10 @@ class RecallAPIService:
             # Add bot name if provided
             if request.bot_name:
                 payload["bot_name"] = request.bot_name
+            
+            # Add profile picture if provided (experimental - check Recall API docs)
+            if hasattr(request, 'profile_picture') and request.profile_picture:
+                payload["avatar_url"] = request.profile_picture
 
             # Add real-time endpoints for live processing if needed
             if (
@@ -70,13 +73,11 @@ class RecallAPIService:
                 payload["recording_config"]["realtime_endpoints"] = [
                     {
                         "type": "websocket",
-                        "config": {
-                            "url": f"{settings.recall_base_url}/webhooks/realtime",
-                            "events": [
-                                "transcript.data",  # Real-time transcript events
-                                "audio_mixed_raw.data",  # Real-time audio events
-                            ],
-                        },
+                        "url": f"{settings.RECALL_BASE_URL}/webhooks/realtime",
+                        "events": [
+                            "transcript.data",  # Real-time transcript events
+                            "audio_mixed_raw.data",  # Real-time audio events
+                        ],
                     }
                 ]
 
@@ -92,25 +93,16 @@ class RecallAPIService:
                     try:
                         data = response.json()
 
-                        meeting_info = MeetingInfo(
-                            meeting_id=data.get("id", ""),
-                            meeting_url=str(request.meeting_url),
-                            platform=self._detect_meeting_platform(
-                                str(request.meeting_url)
-                            ),
-                            status=MeetingStatus.JOINING,
-                            bot_id=data.get("id"),
-                            created_at=datetime.utcnow(),
-                        )
-
-                        return MeetingResponse(
+                        return MeetingJoinResponse(
                             success=True,
                             message="Successfully initiated bot to join meeting",
-                            meeting_info=meeting_info,
                             bot_id=data.get("id"),
+                            status="joining",
+                            meeting_url=str(request.meeting_url),
+                            bot_name=data.get("bot_name", request.bot_name)
                         )
                     except ValueError as json_error:
-                        return MeetingResponse(
+                        return MeetingJoinResponse(
                             success=False,
                             message=f"Received successful response but failed to parse JSON: {str(json_error)}",
                             error_details={
@@ -126,7 +118,7 @@ class RecallAPIService:
                     except ValueError:
                         error_data = {"raw_response": response.text}
 
-                    return MeetingResponse(
+                    return MeetingJoinResponse(
                         success=False,
                         message=f"Failed to join meeting: HTTP {response.status_code}",
                         error_details={
@@ -137,19 +129,19 @@ class RecallAPIService:
                     )
 
         except httpx.TimeoutException:
-            return MeetingResponse(
+            return MeetingJoinResponse(
                 success=False,
                 message="Request timed out - Recall API may be slow or unavailable",
                 error_details={"exception": "TimeoutException"},
             )
         except httpx.ConnectError:
-            return MeetingResponse(
+            return MeetingJoinResponse(
                 success=False,
                 message="Could not connect to Recall API - check network connectivity",
                 error_details={"exception": "ConnectError"},
             )
         except Exception as e:
-            return MeetingResponse(
+            return MeetingJoinResponse(
                 success=False,
                 message=f"Unexpected error joining meeting: {str(e)}",
                 error_details={"exception": str(e), "exception_type": type(e).__name__},

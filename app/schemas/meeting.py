@@ -69,6 +69,7 @@ class MeetingJoinRequest(BaseModel):
     meeting_url: str
     recording_config: Optional[Dict[str, Any]] = None
     bot_name: Optional[str] = None
+    profile_picture: Optional[str] = None  # URL for bot avatar
     enable_realtime_processing: Optional[bool] = False
 
 

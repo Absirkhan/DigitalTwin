@@ -5,7 +5,10 @@ AI-powered meeting automation system with Google OAuth
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
+import os
 
 from app.core.config import settings
 from app.core.database import init_db
@@ -67,6 +70,9 @@ app.add_middleware(
 # Include API routes
 app.include_router(api_router, prefix="/api/v1")
 
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 
 @app.get("/")
 async def root():
@@ -76,8 +82,15 @@ async def root():
         "version": "1.0.0",
         "auth": "Google OAuth enabled",
         "docs": "/docs",
-        "openapi": "/openapi.json"
+        "openapi": "/openapi.json",
+        "digital_twin_profile": "/digital-twin-profile"
     }
+
+
+@app.get("/digital-twin-profile")
+async def serve_digital_twin_profile():
+    """Serve the digital twin profile management page"""
+    return FileResponse("static/digital_twin_profile.html")
 
 
 @app.get("/health")

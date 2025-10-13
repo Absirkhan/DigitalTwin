@@ -23,6 +23,11 @@ from app.services.meeting import (
     join_meeting_with_twin
 )
 from app.services.recall_service import recall_service
+from app.services.meeting_automation import (
+    get_upcoming_auto_join_meetings,
+    force_join_meeting
+)
+from app.services.auto_join_manager import auto_join_manager
 # Import AI responses service with error handling
 try:
     from app.services import ai_responses
@@ -111,27 +116,25 @@ async def delete_meeting_schedule(
     return {"message": "Meeting deleted successfully"}
 
 
-@router.post("/{meeting_id}/join")
-async def join_meeting(
-    meeting_id: int,
-    twin_id: int,
-    db: Session = Depends(get_db)
-):
-    """Join meeting with digital twin"""
-    # return await join_meeting_with_twin(db, meeting_id, twin_id, current_user.id)
-    return await join_meeting_with_twin(db, meeting_id, twin_id, 1)  # Using dummy user_id = 1
-
-
 @router.post("/join", response_model=MeetingJoinResponse)
 async def join_meeting_with_url(
     request: MeetingJoinRequest,
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Join a meeting using the Recall API and save the bot to the database."""
     try:
-        # Set default bot name if not provided
+        # Get user's digital twin settings for bot name and profile picture
+        user = db.query(User).filter(User.id == current_user.id).first()
+        
+        # Use custom bot name from user profile if not provided in request
         if not request.bot_name:
-            request.bot_name = "Digital Twin Bot"
+            request.bot_name = user.bot_name if user and user.bot_name else "Digital Twin Bot"
+        
+        # Use custom profile picture from user profile if not provided in request
+        if not hasattr(request, 'profile_picture') or not request.profile_picture:
+            if user and user.profile_picture:
+                request.profile_picture = user.profile_picture
 
         # 2. Join the meeting via Recall API
         response_data = await recall_service.join_meeting(request)
@@ -144,7 +147,7 @@ async def join_meeting_with_url(
                 bot_name = request.bot_name
                 new_bot = Bot(
                     bot_id=response_data.bot_id,
-                    user_id=1,  # Using dummy user_id = 1
+                    user_id=current_user.id,  # Use authenticated user's ID
                     bot_name=bot_name,
                     # platform and meeting_id can be populated later via webhooks or status checks
                 )
@@ -759,4 +762,147 @@ async def get_formatted_transcript(
         raise HTTPException(
             status_code=500, detail=f"Error retrieving formatted transcript: {str(e)}"
         )
+
+
+# Auto-join management endpoints
+@router.get("/auto-join/upcoming")
+async def get_upcoming_auto_join_meetings_endpoint(
+    db: Session = Depends(get_db)
+):
+    """Get meetings scheduled for auto-join in the next 2 hours"""
+    try:
+        # For development, using user_id=1. In production, get from auth
+        user_id = get_current_user_bearer().id if False else 1  # Replace with get_current_user() in production
+        
+        meetings = get_upcoming_auto_join_meetings(user_id)
+        
+        return {
+            "success": True,
+            "count": len(meetings),
+            "meetings": [
+                {
+                    "id": meeting.id,
+                    "title": meeting.title,
+                    "scheduled_time": meeting.scheduled_time,
+                    "meeting_url": meeting.meeting_url,
+                    "platform": meeting.platform,
+                    "status": meeting.status,
+                    "auto_join": meeting.auto_join,
+                    "digital_twin_id": meeting.digital_twin_id
+                }
+                for meeting in meetings
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting upcoming meetings: {str(e)}")
+
+
+@router.post("/{meeting_id}/force-join")
+async def force_join_meeting_endpoint(
+    meeting_id: int,
+    db: Session = Depends(get_db)
+):
+    """Manually trigger auto-join for a specific meeting"""
+    try:
+        result = force_join_meeting(meeting_id)
+        
+        if result["status"] == "failed":
+            raise HTTPException(status_code=400, detail=result["error"])
+        
+        return {
+            "success": True,
+            "message": f"Auto-join triggered for meeting {meeting_id}",
+            "task_id": result.get("task_id"),
+            "status": result["status"]
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error triggering auto-join: {str(e)}")
+
+
+@router.post("/{meeting_id}/toggle-auto-join")
+async def toggle_auto_join(
+    meeting_id: int,
+    auto_join: bool,
+    db: Session = Depends(get_db)
+):
+    """Toggle auto-join setting for a meeting"""
+    try:
+        # For development, using user_id=1. In production, get from auth
+        user_id = get_current_user_bearer().id if False else 1
+        
+        meeting = await get_meeting(db, meeting_id, user_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        
+        meeting.auto_join = auto_join
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": f"Auto-join {'enabled' if auto_join else 'disabled'} for meeting {meeting_id}",
+            "meeting_id": meeting_id,
+            "auto_join": auto_join
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error toggling auto-join: {str(e)}")
+
+
+@router.get("/auto-join/status")
+async def get_auto_join_status():
+    """Get auto-join system status and configuration"""
+    from app.core.config import settings
+    
+    # Check if services are running
+    service_status = auto_join_manager.is_running()
+    
+    return {
+        "success": True,
+        "auto_join_enabled": True,
+        "services": service_status,
+        "check_interval_seconds": settings.AUTO_JOIN_CHECK_INTERVAL,
+        "advance_minutes": settings.AUTO_JOIN_ADVANCE_MINUTES,
+        "message": "Auto-join system configuration"
+    }
+
+
+@router.post("/auto-join/start-services")
+async def start_auto_join_services():
+    """Start auto-join background services (Celery worker and beat)"""
+    try:
+        result = auto_join_manager.start_all()
+        
+        if result:
+            return {
+                "success": True,
+                "message": "Auto-join services started successfully",
+                "services": auto_join_manager.is_running()
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to start auto-join services")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error starting services: {str(e)}")
+
+
+@router.post("/auto-join/stop-services")
+async def stop_auto_join_services():
+    """Stop auto-join background services"""
+    try:
+        result = auto_join_manager.stop_all()
+        
+        return {
+            "success": True,
+            "message": "Auto-join services stopped",
+            "services": auto_join_manager.is_running()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error stopping services: {str(e)}")
 
