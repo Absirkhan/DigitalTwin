@@ -23,6 +23,11 @@ from app.services.meeting import (
     join_meeting_with_twin
 )
 from app.services.recall_service import recall_service
+from app.services.meeting_automation import (
+    get_upcoming_auto_join_meetings,
+    force_join_meeting
+)
+from app.services.auto_join_manager import auto_join_manager
 # Import AI responses service with error handling
 try:
     from app.services import ai_responses
@@ -167,17 +172,6 @@ async def delete_meeting_schedule(
     return {"message": "Meeting deleted successfully"}
 
 
-@router.post("/{meeting_id}/join")
-async def join_meeting(
-    meeting_id: int,
-    twin_id: int,
-    db: Session = Depends(get_db)
-):
-    """Join meeting with digital twin"""
-    # return await join_meeting_with_twin(db, meeting_id, twin_id, current_user.id)
-    return await join_meeting_with_twin(db, meeting_id, twin_id, 1)  # Using dummy user_id = 1
-
-
 @router.post("/join", response_model=MeetingJoinResponse)
 async def join_meeting_with_url(
     request: MeetingJoinRequest,
@@ -186,11 +180,17 @@ async def join_meeting_with_url(
 ):
     """Join a meeting using the Recall API and save the bot to the database."""
     try:
-        # Get bot name from user's profile, or use provided name, or default
-        bot_name = current_user.bot_name or request.bot_name or "Digital Twin Bot"
+        # Get user's digital twin settings for bot name and profile picture
+        user = db.query(User).filter(User.id == current_user.id).first()
         
-        # Update the request with the determined bot name
-        request.bot_name = bot_name
+        # Use custom bot name from user profile if not provided in request
+        if not request.bot_name:
+            request.bot_name = user.bot_name if user and user.bot_name else "Digital Twin Bot"
+        
+        # Use custom profile picture from user profile if not provided in request
+        if not hasattr(request, 'profile_picture') or not request.profile_picture:
+            if user and user.profile_picture:
+                request.profile_picture = user.profile_picture
 
         # 2. Join the meeting via Recall API
         response_data = await recall_service.join_meeting(request)
@@ -854,275 +854,145 @@ async def get_formatted_transcript(
         )
 
 
-@router.get("/recording/{bot_id}")
-async def get_recording_status(
-    bot_id: str,
-    current_user: User = Depends(get_current_user_bearer),
+# Auto-join management endpoints
+@router.get("/auto-join/upcoming")
+async def get_upcoming_auto_join_meetings_endpoint(
     db: Session = Depends(get_db)
 ):
-    """
-    Get recording status and information for a bot
-    """
+    """Get meetings scheduled for auto-join in the next 2 hours"""
     try:
-        # Check if bot belongs to current user
-        bot = db.query(Bot).filter(Bot.bot_id == bot_id, Bot.user_id == current_user.id).first()
-        if not bot:
-            raise HTTPException(status_code=404, detail="Bot not found or access denied")
+        # For development, using user_id=1. In production, get from auth
+        user_id = get_current_user_bearer().id if False else 1  # Replace with get_current_user() in production
         
-        # Get recording status using recall service
-        status = recall_service.get_recording_status(bot_id, db)
-        
-        if "error" in status:
-            raise HTTPException(status_code=500, detail=status["error"])
-        
-        return status
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting recording status: {str(e)}")
-
-
-@router.post("/recording/{bot_id}/update")
-async def update_recording_status(
-    bot_id: str,
-    current_user: User = Depends(get_current_user_bearer),
-    db: Session = Depends(get_db)
-):
-    """
-    Update recording status by fetching latest data from Recall API
-    """
-    try:
-        # Check if bot belongs to current user
-        bot = db.query(Bot).filter(Bot.bot_id == bot_id, Bot.user_id == current_user.id).first()
-        if not bot:
-            raise HTTPException(status_code=404, detail="Bot not found or access denied")
-        
-        # Update recording status using recall service
-        updated_bot = await recall_service.update_bot_recording_status(bot_id, db)
-        
-        if not updated_bot:
-            raise HTTPException(status_code=500, detail="Failed to update recording status")
+        meetings = get_upcoming_auto_join_meetings(user_id)
         
         return {
             "success": True,
-            "message": "Recording status updated successfully",
-            "bot_id": bot_id,
-            "recording_status": updated_bot.recording_status,
-            "video_recording_url": updated_bot.video_recording_url,
-            "recording_expires_at": updated_bot.recording_expires_at.isoformat() if updated_bot.recording_expires_at else None
+            "count": len(meetings),
+            "meetings": [
+                {
+                    "id": meeting.id,
+                    "title": meeting.title,
+                    "scheduled_time": meeting.scheduled_time,
+                    "meeting_url": meeting.meeting_url,
+                    "platform": meeting.platform,
+                    "status": meeting.status,
+                    "auto_join": meeting.auto_join,
+                    "digital_twin_id": meeting.digital_twin_id
+                }
+                for meeting in meetings
+            ]
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting upcoming meetings: {str(e)}")
+
+
+@router.post("/{meeting_id}/force-join")
+async def force_join_meeting_endpoint(
+    meeting_id: int,
+    db: Session = Depends(get_db)
+):
+    """Manually trigger auto-join for a specific meeting"""
+    try:
+        result = force_join_meeting(meeting_id)
+        
+        if result["status"] == "failed":
+            raise HTTPException(status_code=400, detail=result["error"])
+        
+        return {
+            "success": True,
+            "message": f"Auto-join triggered for meeting {meeting_id}",
+            "task_id": result.get("task_id"),
+            "status": result["status"]
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error updating recording status: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error triggering auto-join: {str(e)}")
 
 
-@router.post("/recording/{bot_id}/download")
-async def download_recording(
-    bot_id: str,
-    current_user: User = Depends(get_current_user_bearer),
+@router.post("/{meeting_id}/toggle-auto-join")
+async def toggle_auto_join(
+    meeting_id: int,
+    auto_join: bool,
     db: Session = Depends(get_db)
 ):
-    """
-    Download and store recording locally
-    """
+    """Toggle auto-join setting for a meeting"""
     try:
-        # Check if bot belongs to current user
-        bot = db.query(Bot).filter(Bot.bot_id == bot_id, Bot.user_id == current_user.id).first()
-        if not bot:
-            raise HTTPException(status_code=404, detail="Bot not found or access denied")
+        # For development, using user_id=1. In production, get from auth
+        user_id = get_current_user_bearer().id if False else 1
         
-        # Download recording using recall service
-        local_path = await recall_service.download_and_store_recording(bot_id, db)
+        meeting = await get_meeting(db, meeting_id, user_id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
         
-        if not local_path:
-            raise HTTPException(status_code=500, detail="Failed to download recording")
-        
-        return {
-            "success": True,
-            "message": "Recording downloaded successfully",
-            "bot_id": bot_id,
-            "local_path": local_path
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error downloading recording: {str(e)}")
-
-
-@router.post("/recording/{bot_id}/process")
-async def process_completed_recording(
-    bot_id: str,
-    current_user: User = Depends(get_current_user_bearer),
-    db: Session = Depends(get_db)
-):
-    """
-    Process a completed recording (update status and download if needed)
-    """
-    try:
-        # Check if bot belongs to current user
-        bot = db.query(Bot).filter(Bot.bot_id == bot_id, Bot.user_id == current_user.id).first()
-        if not bot:
-            raise HTTPException(status_code=404, detail="Bot not found or access denied")
-        
-        # Process completed recording using recall service
-        success = await recall_service.process_completed_recording(bot_id, db)
-        
-        if not success:
-            raise HTTPException(status_code=500, detail="Failed to process recording")
-        
-        # Get updated status
-        status = recall_service.get_recording_status(bot_id, db)
-        
-        return {
-            "success": True,
-            "message": "Recording processed successfully",
-            "bot_id": bot_id,
-            "status": status
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing recording: {str(e)}")
-
-
-@router.get("/recordings/expired")
-async def check_expired_recordings(
-    current_user: User = Depends(get_current_user_bearer),
-    db: Session = Depends(get_db)
-):
-    """
-    Check and update expired recording URLs
-    """
-    try:
-        # Check expired recordings using recall service
-        expired_bot_ids = await recall_service.check_and_update_expired_recordings(db)
-        
-        return {
-            "success": True,
-            "message": f"Checked expired recordings, found {len(expired_bot_ids)} expired",
-            "expired_bot_ids": expired_bot_ids
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error checking expired recordings: {str(e)}")
-
-
-@router.post("/webhook/recording-status")
-async def recording_status_webhook(
-    request: dict,
-    db: Session = Depends(get_db)
-):
-    """
-    Webhook endpoint for Recall API recording status updates
-    """
-    try:
-        # Extract bot_id from webhook data
-        bot_id = request.get("data", {}).get("bot", {}).get("id")
-        if not bot_id:
-            raise HTTPException(status_code=400, detail="No bot ID found in webhook data")
-        
-        # Extract event type
-        event_type = request.get("event", {}).get("type")
-        
-        # Log the webhook event
-        logging.info(f"Received recording webhook for bot {bot_id}, event: {event_type}")
-        
-        # Update recording status based on event type using recall service
-        if event_type in ["bot.status_change", "bot.recording.done"]:
-            # Update bot recording status
-            updated_bot = await recall_service.update_bot_recording_status(bot_id, db)
-            
-            if updated_bot and updated_bot.recording_status == "completed":
-                # If recording is completed, process it (download if needed)
-                await recall_service.process_completed_recording(bot_id, db)
-        
-        return {"status": "success", "message": "Webhook processed"}
-        
-    except Exception as e:
-        logging.error(f"Error processing recording webhook: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error processing webhook: {str(e)}")
-
-
-@router.get("/recording/{bot_id}/download-url")
-async def get_recording_download_url(
-    bot_id: str,
-    current_user: User = Depends(get_current_user_bearer),
-    db: Session = Depends(get_db)
-):
-    """
-    Get the recording download URL for a bot and store it in the database.
-    Returns only the download URL.
-    """
-    try:
-        # Check if bot belongs to current user
-        bot = db.query(Bot).filter(Bot.bot_id == bot_id, Bot.user_id == current_user.id).first()
-        if not bot:
-            raise HTTPException(status_code=404, detail="Bot not found or access denied")
-        
-        # Get recordings from Recall API
-        recordings_response = await recall_service.list_recordings(bot_id=bot_id, limit=1)
-        
-        if not recordings_response.get("success"):
-            raise HTTPException(status_code=500, detail="Failed to retrieve recordings from Recall API")
-        
-        recordings = recordings_response.get("recordings", [])
-        if not recordings:
-            raise HTTPException(status_code=404, detail="No recordings found for this bot")
-        
-        # Get the most recent recording
-        latest_recording = recordings[0]
-        
-        # Check if recording is completed
-        recording_status = latest_recording.get("status", {}).get("code")
-        if recording_status != "done":
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Recording not ready. Current status: {recording_status}"
-            )
-        
-        # Extract download URL from media_shortcuts
-        media_shortcuts = latest_recording.get("media_shortcuts", {})
-        video_mixed = media_shortcuts.get("video_mixed", {})
-        video_data = video_mixed.get("data", {})
-        download_url = video_data.get("download_url")
-        
-        if not download_url:
-            raise HTTPException(status_code=404, detail="Download URL not found in recording data")
-        
-        # Store the URL in the database
-        bot.video_recording_url = download_url
-        bot.recording_status = "completed"
-        
-        # Store recording metadata
-        bot.recording_data = latest_recording
-        
-        # Set expiration date (URLs typically expire after some time)
-        # The URL in your example expires at timestamp 1760909534
-        completed_at = latest_recording.get("completed_at")
-        if completed_at:
-            from datetime import datetime, timedelta
-            try:
-                completed_time = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
-                # Assume URLs expire 7 days after completion (adjust as needed)
-                bot.recording_expires_at = completed_time + timedelta(days=7)
-            except:
-                # Fallback: set expiration to 7 days from now
-                bot.recording_expires_at = datetime.utcnow() + timedelta(days=7)
-        
+        meeting.auto_join = auto_join
         db.commit()
         
         return {
-            "download_url": download_url
+            "success": True,
+            "message": f"Auto-join {'enabled' if auto_join else 'disabled'} for meeting {meeting_id}",
+            "meeting_id": meeting_id,
+            "auto_join": auto_join
         }
         
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Error getting recording download URL: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error retrieving download URL: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error toggling auto-join: {str(e)}")
+
+
+@router.get("/auto-join/status")
+async def get_auto_join_status():
+    """Get auto-join system status and configuration"""
+    from app.core.config import settings
+    
+    # Check if services are running
+    service_status = auto_join_manager.is_running()
+    
+    return {
+        "success": True,
+        "auto_join_enabled": True,
+        "services": service_status,
+        "check_interval_seconds": settings.AUTO_JOIN_CHECK_INTERVAL,
+        "advance_minutes": settings.AUTO_JOIN_ADVANCE_MINUTES,
+        "message": "Auto-join system configuration"
+    }
+
+
+@router.post("/auto-join/start-services")
+async def start_auto_join_services():
+    """Start auto-join background services (Celery worker and beat)"""
+    try:
+        result = auto_join_manager.start_all()
+        
+        if result:
+            return {
+                "success": True,
+                "message": "Auto-join services started successfully",
+                "services": auto_join_manager.is_running()
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to start auto-join services")
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error starting services: {str(e)}")
+
+
+@router.post("/auto-join/stop-services")
+async def stop_auto_join_services():
+    """Stop auto-join background services"""
+    try:
+        result = auto_join_manager.stop_all()
+        
+        return {
+            "success": True,
+            "message": "Auto-join services stopped",
+            "services": auto_join_manager.is_running()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error stopping services: {str(e)}")
 

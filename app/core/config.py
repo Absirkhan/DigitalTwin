@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     
     # Recall AI
     RECALL_API_KEY: str = ""
-    RECALL_BASE_URL: str = ""
+    RECALL_BASE_URL: str = "https://us-west-2.recall.ai/api/v1"
     
     # Voice Settings
     VOICE_MODEL_PATH: str = "models/voice/"
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = 200
     
     # Auto-join Settings
-    AUTO_JOIN_ADVANCE_MINUTES: int = 2  # Join meeting 2 minutes before start
+    AUTO_JOIN_ADVANCE_MINUTES: int = 2  # Join meeting 2 minutes before start time
     AUTO_JOIN_CHECK_INTERVAL: int = 30  # Check for meetings every 30 seconds
     
     model_config = ConfigDict(env_file=".env")

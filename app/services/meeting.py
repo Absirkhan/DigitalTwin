@@ -14,6 +14,12 @@ from app.services.meeting_automation import schedule_meeting_join
 
 async def create_meeting(db: Session, meeting: MeetingCreate, user_id: int) -> Meeting:
     """Create a new meeting"""
+    
+    # If auto_join is enabled and no digital_twin_id is provided, use user_id
+    digital_twin_id = meeting.digital_twin_id
+    if meeting.auto_join and not digital_twin_id:
+        digital_twin_id = user_id  # Each user has their own digital twin with same ID
+    
     db_meeting = Meeting(
         title=meeting.title,
         description=meeting.description,
@@ -22,7 +28,7 @@ async def create_meeting(db: Session, meeting: MeetingCreate, user_id: int) -> M
         scheduled_time=meeting.scheduled_time,
         duration_minutes=meeting.duration_minutes or 60,
         user_id=user_id,
-        digital_twin_id=meeting.digital_twin_id,
+        digital_twin_id=digital_twin_id,
         auto_join=meeting.auto_join,
         status="scheduled"
     )

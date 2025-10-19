@@ -15,10 +15,7 @@ from app.schemas.meeting import (
     TranscriptDetailResponse,
     MeetingPlatform,
     MeetingStatus,
-    MeetingInfo,
-    TranscriptChunk,
-    RecordingResponse,
-    RecordingInfo
+    TranscriptChunk
 )
 from app.models.meeting import Meeting
 from app.models.bot import Bot
@@ -49,7 +46,7 @@ class RecallAPIService:
             return MeetingPlatform.OTHER
 
     async def join_meeting(self, request: MeetingJoinRequest) -> MeetingJoinResponse:
-        """Join a meeting using the Recall API with enhanced transcript, audio, and video recording configuration"""
+        """Join a meeting using the Recall API with enhanced transcript and audio configuration"""
         try:
             # Prepare the payload for Recall API according to official documentation
             payload = {
@@ -67,6 +64,10 @@ class RecallAPIService:
             # Add bot name if provided
             if request.bot_name:
                 payload["bot_name"] = request.bot_name
+            
+            # Add profile picture if provided (experimental - check Recall API docs)
+            if hasattr(request, 'profile_picture') and request.profile_picture:
+                payload["avatar_url"] = request.profile_picture
 
             # Add real-time endpoints for live processing if needed
             if (
@@ -76,13 +77,11 @@ class RecallAPIService:
                 payload["recording_config"]["realtime_endpoints"] = [
                     {
                         "type": "websocket",
-                        "config": {
-                            "url": f"{settings.recall_base_url}/webhooks/realtime",
-                            "events": [
-                                "transcript.data",  # Real-time transcript events
-                                "audio_mixed_raw.data",  # Real-time audio events
-                            ],
-                        },
+                        "url": f"{settings.RECALL_BASE_URL}/webhooks/realtime",
+                        "events": [
+                            "transcript.data",  # Real-time transcript events
+                            "audio_mixed_raw.data",  # Real-time audio events
+                        ],
                     }
                 ]
 
@@ -104,7 +103,7 @@ class RecallAPIService:
                             bot_id=data.get("id"),
                             status="joining",
                             meeting_url=str(request.meeting_url),
-                            bot_name=request.bot_name
+                            bot_name=data.get("bot_name", request.bot_name)
                         )
                     except ValueError as json_error:
                         return MeetingJoinResponse(

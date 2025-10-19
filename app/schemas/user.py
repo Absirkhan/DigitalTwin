@@ -22,3 +22,21 @@ class UserResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class DigitalTwinProfileUpdate(BaseModel):
+    """Schema for updating digital twin profile settings"""
+    bot_name: Optional[str] = None
+    profile_picture: Optional[str] = None  # URL or base64 string
+
+
+class DigitalTwinProfileResponse(BaseModel):
+    """Schema for digital twin profile response"""
+    user_id: int
+    bot_name: Optional[str] = None
+    profile_picture: Optional[str] = None
+    full_name: Optional[str] = None
+    email: str
+
+    class Config:
+        from_attributes = True

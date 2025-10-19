@@ -345,6 +345,10 @@ class GoogleCalendarService:
                         logger.info(f"Updated existing meeting {existing_meeting.id} for event {event_id}")
                     else:
                         # Create new meeting
+                        # Enable auto-join if user has backend tasks enabled
+                        auto_join_enabled = user.enable_backend_tasks if user.enable_backend_tasks is not None else True
+                        digital_twin_id = user.id if auto_join_enabled else None
+                        
                         new_meeting = Meeting(
                             user_id=user.id,
                             title=summary,
@@ -358,6 +362,8 @@ class GoogleCalendarService:
                             status="scheduled",
                             participants=participants,
                             calendar_event_id=event_id,
+                            auto_join=auto_join_enabled,  # Enable auto-join based on user preference
+                            digital_twin_id=digital_twin_id,  # Set to user_id if auto-join enabled
                             created_at=datetime.utcnow()
                         )
                         db.add(new_meeting)
