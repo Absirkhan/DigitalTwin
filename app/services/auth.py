@@ -160,6 +160,8 @@ async def create_or_update_user_from_google(db: Session, user_info: Dict[str, An
     full_name = user_info.get('name', '')
     profile_picture = user_info.get('picture')
     
+    print(f"DEBUG: Looking for user with Google ID: {google_id} or email: {email}")
+    
     # Check if user exists by Google ID first, then by email
     user = await get_user_by_google_id(db, google_id)
     if not user:
@@ -167,14 +169,18 @@ async def create_or_update_user_from_google(db: Session, user_info: Dict[str, An
     
     if user:
         # Update existing user
+        print(f"DEBUG: Updating existing user {user.id} with new tokens")
+        print(f"DEBUG: Old tokens: {bool(user.oauth_tokens)}")
         user.google_id = google_id
         user.email = email
         user.full_name = full_name
         user.profile_picture = profile_picture
-        user.oauth_tokens = tokens
+        user.oauth_tokens = tokens  # This should update the tokens
         user.is_active = True
+        print(f"DEBUG: New tokens set: {bool(tokens)}")
     else:
         # Create new user
+        print(f"DEBUG: Creating new user for email: {email}")
         user = User(
             email=email,
             full_name=full_name,
@@ -187,6 +193,7 @@ async def create_or_update_user_from_google(db: Session, user_info: Dict[str, An
     
     db.commit()
     db.refresh(user)
+    print(f"DEBUG: User saved/updated with tokens: {bool(user.oauth_tokens)}")
     return user
 
 

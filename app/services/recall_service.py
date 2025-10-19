@@ -57,6 +57,10 @@ class RecallAPIService:
                 },
             }
 
+            # Add video recording if enabled
+            if request.enable_video_recording:
+                payload["recording_config"]["video_mixed_mp4"] = {}
+
             # Add bot name if provided
             if request.bot_name:
                 payload["bot_name"] = request.bot_name
@@ -105,6 +109,10 @@ class RecallAPIService:
                         return MeetingJoinResponse(
                             success=False,
                             message=f"Received successful response but failed to parse JSON: {str(json_error)}",
+                            bot_id=None,
+                            status="error",
+                            meeting_url=str(request.meeting_url),
+                            bot_name=request.bot_name,
                             error_details={
                                 "json_parse_error": str(json_error),
                                 "response_text": response.text,
@@ -121,6 +129,10 @@ class RecallAPIService:
                     return MeetingJoinResponse(
                         success=False,
                         message=f"Failed to join meeting: HTTP {response.status_code}",
+                        bot_id=None,
+                        status="error", 
+                        meeting_url=str(request.meeting_url),
+                        bot_name=request.bot_name,
                         error_details={
                             "status_code": response.status_code,
                             "response_data": error_data,
@@ -132,18 +144,30 @@ class RecallAPIService:
             return MeetingJoinResponse(
                 success=False,
                 message="Request timed out - Recall API may be slow or unavailable",
+                bot_id=None,
+                status="error",
+                meeting_url=str(request.meeting_url),
+                bot_name=request.bot_name,
                 error_details={"exception": "TimeoutException"},
             )
         except httpx.ConnectError:
             return MeetingJoinResponse(
                 success=False,
                 message="Could not connect to Recall API - check network connectivity",
+                bot_id=None,
+                status="error",
+                meeting_url=str(request.meeting_url),
+                bot_name=request.bot_name,
                 error_details={"exception": "ConnectError"},
             )
         except Exception as e:
             return MeetingJoinResponse(
                 success=False,
                 message=f"Unexpected error joining meeting: {str(e)}",
+                bot_id=None,
+                status="error",
+                meeting_url=str(request.meeting_url),
+                bot_name=request.bot_name,
                 error_details={"exception": str(e), "exception_type": type(e).__name__},
             )
 
@@ -1086,5 +1110,310 @@ class RecallAPIService:
         remaining_seconds = int(seconds % 60)
         return f"{minutes:02d}:{remaining_seconds:02d}"
 
-# Global service instance
+    async def get_bot_recordings(self, bot_id: str) -> RecordingResponse:
+        """
+        Fetch recordings for a specific bot from Recall API
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{self.base_url}/bot/{bot_id}/",
+                    headers=self.headers
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    recordings = data.get("recordings", [])
+                    
+                    if recordings:
+                        recording_info_list = []
+                        download_url = None
+                        
+                        for recording in recordings:
+                            # Parse recording data
+                            recording_info = {
+                                "id": recording.get("id"),
+                                "created_at": recording.get("created_at"),
+                                "started_at": recording.get("started_at"),
+                                "completed_at": recording.get("completed_at"),
+                                "expires_at": recording.get("expires_at"),
+                                "status": recording.get("status", {}),
+                                "media_shortcuts": recording.get("media_shortcuts", {})
+                            }
+                            recording_info_list.append(recording_info)
+                            
+                            # Extract video download URL if available
+                            media_shortcuts = recording.get("media_shortcuts", {})
+                            video_mixed = media_shortcuts.get("video_mixed", {})
+                            if video_mixed and video_mixed.get("data", {}).get("download_url"):
+                                download_url = video_mixed["data"]["download_url"]
+                        
+                        return RecordingResponse(
+                            success=True,
+                            message="Recordings retrieved successfully",
+                            bot_id=bot_id,
+                            recordings=[RecordingInfo(**info) for info in recording_info_list],
+                            download_url=download_url
+                        )
+                    else:
+                        return RecordingResponse(
+                            success=True,
+                            message="No recordings found for this bot",
+                            bot_id=bot_id,
+                            recordings=[]
+                        )
+                else:
+                    try:
+                        error_data = response.json() if response.content else {}
+                    except ValueError:
+                        error_data = {"raw_response": response.text}
+                    
+                    return RecordingResponse(
+                        success=False,
+                        message=f"Failed to retrieve recordings: HTTP {response.status_code}",
+                        bot_id=bot_id,
+                        error_details={
+                            "status_code": response.status_code,
+                            "response_data": error_data,
+                            "response_text": response.text,
+                        }
+                    )
+                    
+        except httpx.TimeoutException:
+            return RecordingResponse(
+                success=False,
+                message="Request timed out - Recall API may be slow or unavailable",
+                bot_id=bot_id,
+                error_details={"exception": "TimeoutException"}
+            )
+        except httpx.ConnectError:
+            return RecordingResponse(
+                success=False,
+                message="Could not connect to Recall API - check network connectivity",
+                bot_id=bot_id,
+                error_details={"exception": "ConnectError"}
+            )
+        except Exception as e:
+            return RecordingResponse(
+                success=False,
+                message=f"Unexpected error retrieving recordings: {str(e)}",
+                bot_id=bot_id,
+                error_details={"exception": str(e)}
+            )
+
+    async def download_recording(self, download_url: str, local_path: str) -> bool:
+        """
+        Download a recording file from the provided URL to local storage
+        """
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:  # Longer timeout for file downloads
+                response = await client.get(download_url, follow_redirects=True)
+                
+                if response.status_code == 200:
+                    # Ensure directory exists
+                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                    
+                    # Write file to disk
+                    with open(local_path, 'wb') as f:
+                        f.write(response.content)
+                    
+                    return True
+                else:
+                    print(f"Failed to download recording: HTTP {response.status_code}")
+                    return False
+                    
+        except Exception as e:
+            print(f"Error downloading recording: {str(e)}")
+            return False
+
+    # Recording Management Methods (moved from recording_service.py)
+    async def update_bot_recording_status(self, bot_id: str, db) -> Optional[Any]:
+        """
+        Update bot recording status by fetching latest data from Recall API
+        """
+        try:
+            # Import here to avoid circular import
+            from app.models.bot import Bot
+            
+            # Fetch recording data from Recall API
+            recording_response = await self.get_bot_recordings(bot_id)
+            
+            # Find bot in database
+            bot = db.query(Bot).filter(Bot.bot_id == bot_id).first()
+            if not bot:
+                print(f"Bot with ID {bot_id} not found in database")
+                return None
+            
+            if recording_response.success and recording_response.recordings:
+                # Update bot with recording information
+                latest_recording = recording_response.recordings[0]  # Get the most recent recording
+                
+                # Update recording status based on the API response
+                api_status = latest_recording.status.get("code", "unknown")
+                if api_status == "done":
+                    bot.recording_status = "completed"
+                elif api_status == "in_progress":
+                    bot.recording_status = "recording"
+                elif api_status == "failed":
+                    bot.recording_status = "failed"
+                else:
+                    bot.recording_status = "unknown"
+                
+                # Store recording metadata
+                bot.recording_data = latest_recording.dict()
+                
+                # Extract download URL if available
+                if hasattr(latest_recording, 'media_shortcuts') and latest_recording.media_shortcuts:
+                    video_data = latest_recording.media_shortcuts.get('video_mixed', {}).get('data', {})
+                    if video_data and 'download_url' in video_data:
+                        bot.video_recording_url = video_data['download_url']
+                        
+                # Set expiration date
+                if hasattr(latest_recording, 'expires_at'):
+                    bot.recording_expires_at = latest_recording.expires_at
+                
+                db.commit()
+                return bot
+            
+            return bot
+            
+        except Exception as e:
+            print(f"Error updating bot recording status: {str(e)}")
+            return None
+
+    async def download_and_store_recording(self, bot_id: str, db, base_path: str = "recordings/generated") -> Optional[str]:
+        """
+        Download and store recording locally for a bot
+        """
+        try:
+            from app.models.bot import Bot
+            import os
+            
+            # Get bot from database
+            bot = db.query(Bot).filter(Bot.bot_id == bot_id).first()
+            if not bot or not bot.video_recording_url:
+                print(f"No bot or recording URL found for bot_id: {bot_id}")
+                return None
+            
+            # Create local file path
+            os.makedirs(base_path, exist_ok=True)
+            local_filename = f"{bot_id}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.mp4"
+            local_path = os.path.join(base_path, local_filename)
+            
+            # Download the file
+            success = await self.download_recording(bot.video_recording_url, local_path)
+            
+            if success:
+                # Update bot with local file path
+                bot.video_download_url = local_path
+                bot.recording_status = "downloaded"
+                db.commit()
+                
+                print(f"Successfully downloaded recording for bot {bot_id} to {local_path}")
+                return local_path
+            else:
+                print(f"Failed to download recording for bot {bot_id}")
+                return None
+                
+        except Exception as e:
+            print(f"Error downloading and storing recording: {str(e)}")
+            return None
+
+    def get_recording_status(self, bot_id: str, db) -> Dict[str, Any]:
+        """
+        Get recording status and information for a bot
+        """
+        try:
+            from app.models.bot import Bot
+            import os
+            
+            bot = db.query(Bot).filter(Bot.bot_id == bot_id).first()
+            if not bot:
+                return {"error": "Bot not found"}
+            
+            return {
+                "bot_id": bot.bot_id,
+                "recording_status": bot.recording_status,
+                "video_recording_url": bot.video_recording_url,
+                "video_download_url": bot.video_download_url,
+                "recording_expires_at": bot.recording_expires_at.isoformat() if bot.recording_expires_at else None,
+                "recording_data": bot.recording_data,
+                "has_local_file": bool(bot.video_download_url and os.path.exists(bot.video_download_url))
+            }
+            
+        except Exception as e:
+            return {"error": f"Error getting recording status: {str(e)}"}
+
+    async def process_completed_recording(self, bot_id: str, db) -> bool:
+        """
+        Process a completed recording (update status and optionally download)
+        """
+        try:
+            # Update recording status from API
+            bot = await self.update_bot_recording_status(bot_id, db)
+            if not bot:
+                return False
+            
+            # If recording is completed and we have a URL, download it
+            if bot.recording_status == "completed" and bot.video_recording_url:
+                local_path = await self.download_and_store_recording(bot_id, db)
+                return bool(local_path)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error processing completed recording: {str(e)}")
+            return False
+
+    def get_local_recording_path(self, bot_id: str, db) -> Optional[str]:
+        """
+        Get the local file path for a bot's recording if it exists
+        """
+        try:
+            from app.models.bot import Bot
+            import os
+            
+            bot = db.query(Bot).filter(Bot.bot_id == bot_id).first()
+            if bot and bot.video_download_url and os.path.exists(bot.video_download_url):
+                return bot.video_download_url
+            return None
+        except Exception as e:
+            print(f"Error getting local recording path: {str(e)}")
+            return None
+
+    async def check_and_update_expired_recordings(self, db) -> List[str]:
+        """
+        Check for expired recording URLs and update their status
+        """
+        try:
+            from app.models.bot import Bot
+            from sqlalchemy import and_
+            
+            # Find bots with recording URLs that might be expired
+            current_time = datetime.utcnow()
+            expired_bots = db.query(Bot).filter(
+                and_(
+                    Bot.recording_expires_at.isnot(None),
+                    Bot.recording_expires_at < current_time,
+                    Bot.video_recording_url.isnot(None)
+                )
+            ).all()
+            
+            expired_bot_ids = []
+            for bot in expired_bots:
+                # Clear expired URL
+                bot.video_recording_url = None
+                bot.recording_status = "expired"
+                expired_bot_ids.append(bot.bot_id)
+                print(f"Marked recording as expired for bot {bot.bot_id}")
+            
+            if expired_bot_ids:
+                db.commit()
+            
+            return expired_bot_ids
+            
+        except Exception as e:
+            print(f"Error checking expired recordings: {str(e)}")
+            db.rollback()
+            return []# Global service instance
 recall_service = RecallAPIService()

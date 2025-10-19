@@ -116,6 +116,18 @@ async def get_current_user_info(current_user = Depends(get_current_user_bearer))
     return current_user
 
 
+@router.get("/debug/tokens")
+async def debug_user_tokens(current_user = Depends(get_current_user_bearer)):
+    """Debug endpoint to check user's stored tokens"""
+    return {
+        "user_id": current_user.id,
+        "email": current_user.email,
+        "has_tokens": bool(current_user.oauth_tokens),
+        "token_keys": list(current_user.oauth_tokens.keys()) if current_user.oauth_tokens else [],
+        "bot_name": current_user.bot_name
+    }
+
+
 @router.post("/refresh-tokens", response_model=dict)
 async def refresh_tokens(current_user = Depends(get_current_user_bearer), db: Session = Depends(get_db)):
     """Refresh Google OAuth tokens"""

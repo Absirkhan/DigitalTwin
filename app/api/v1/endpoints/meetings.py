@@ -37,12 +37,68 @@ except ImportError as e:
     ai_responses = None
     AI_RESPONSES_AVAILABLE = False
 
+# Import your fine-tuned summary service
+try:
+    from app.services.summary_service import generate_meeting_summary, is_summary_service_available
+    SUMMARY_SERVICE_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Summary service not available: {e}")
+    SUMMARY_SERVICE_AVAILABLE = False
+
 from app.models.user import User
 from app.models.bot import Bot
 from app.models.meeting import Meeting
 from app.core.config import settings
 
 router = APIRouter()
+
+
+@router.get("/summary/test")
+async def test_summary_service():
+    """Test endpoint for your fine-tuned summary model"""
+    try:
+        if not SUMMARY_SERVICE_AVAILABLE:
+            return {
+                "success": False,
+                "message": "Summary service not available",
+                "help": "Place your fine-tuned model files in summary_model/ folder"
+            }
+        
+        # Test with sample meeting transcript
+        test_transcript = """
+        John: Good morning everyone, thanks for joining today's project review meeting.
+        Sarah: Hi John, glad to be here. I've prepared the quarterly report.
+        Mike: Morning all. I have the technical updates ready to share.
+        John: Perfect. Sarah, let's start with your quarterly numbers.
+        Sarah: Sure. This quarter we achieved 125% of our target revenue, which is $2.5M total.
+        Mike: That's fantastic! On the technical side, we successfully deployed the new API system.
+        John: Excellent work team. For next quarter, let's focus on expanding to the European market.
+        Sarah: I'll prepare the market analysis by next Friday.
+        Mike: I'll work on the technical infrastructure requirements for Europe.
+        John: Great. Meeting adjourned. Thanks everyone!
+        """
+        
+        result = generate_meeting_summary(test_transcript)
+        
+        return {
+            "success": result["success"],
+            "message": "Summary service test completed",
+            "model_status": "fine-tuned FLAN-T5" if result["success"] else "failed",
+            "test_result": {
+                "original_words": len(test_transcript.split()),
+                "summary_words": result["word_count"],
+                "compression_ratio": f"{result['compression_ratio']:.1%}",
+                "summary": result["summary"]
+            },
+            "service_available": is_summary_service_available()
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Test failed: {str(e)}",
+            "help": "Check if model files are properly placed in summary_model/ folder"
+        }
 
 
 @router.get("/debug/config")
@@ -143,23 +199,34 @@ async def join_meeting_with_url(
         if response_data.success and response_data.bot_id:
             existing_bot = db.query(Bot).filter(Bot.bot_id == response_data.bot_id).first()
             if not existing_bot:
-                # Use the bot name from request
-                bot_name = request.bot_name
                 new_bot = Bot(
                     bot_id=response_data.bot_id,
                     user_id=current_user.id,  # Use authenticated user's ID
                     bot_name=bot_name,
+                    recording_status="pending" if request.enable_video_recording else "not_requested",
                     # platform and meeting_id can be populated later via webhooks or status checks
                 )
                 db.add(new_bot)
                 db.commit()
+                
+                # If video recording was enabled, note it in the response
+                if request.enable_video_recording:
+                    response_data.message += " (Video recording enabled)"
 
         return response_data
 
     except Exception as e:
         db.rollback()
         logging.error(f"Error in join_meeting: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+        return MeetingJoinResponse(
+            success=False,
+            message=f"An unexpected error occurred: {str(e)}",
+            bot_id=None,
+            status="error",
+            meeting_url=request.meeting_url,
+            bot_name=request.bot_name,
+            error_details={"error_type": type(e).__name__, "error_message": str(e)}
+        )
 
 
 @router.post("/transcript", response_model=MeetingTranscriptResponse)
@@ -246,26 +313,49 @@ async def receive_meeting_transcript(
             if not bot.meeting_id and meeting:
                 bot.meeting_id = meeting.id
 
-        # Process transcript with AI for summary and action items
+        # Process transcript with your fine-tuned model for summary generation
         summary_generated = False
         action_items_extracted = False
         
         try:
-            if meeting and AI_RESPONSES_AVAILABLE and ai_responses:
-                # Use the AI service to process the transcript
-                ai_responses.process_meeting_transcript(
-                    meeting_id=meeting.id,
-                    transcript=full_transcript,
-                    twin_id=meeting.digital_twin_id or 1  # Use default twin if none specified
-                )
-                summary_generated = True
-                action_items_extracted = True
-            elif meeting:
-                # If AI is not available, just log a warning
-                logging.warning("AI responses service not available - skipping AI processing")
-        except Exception as ai_error:
-            logging.warning(f"AI processing failed for transcript: {ai_error}")
-            # Continue even if AI processing fails
+            if meeting and full_transcript:
+                # Try your fine-tuned model first
+                if SUMMARY_SERVICE_AVAILABLE:
+                    try:
+                        logging.info("🤖 Using fine-tuned FLAN-T5 model for summary generation...")
+                        summary_result = generate_meeting_summary(full_transcript)
+                        
+                        if summary_result["success"]:
+                            meeting.summary = summary_result["summary"]
+                            summary_generated = True
+                            logging.info(f"✅ Summary generated: {summary_result['word_count']} words "
+                                       f"({summary_result['compression_ratio']:.1%} compression)")
+                        else:
+                            logging.warning(f"Fine-tuned model failed: {summary_result['summary']}")
+                    except Exception as model_error:
+                        logging.warning(f"Fine-tuned model error: {model_error}")
+                
+                # Fallback to AI responses if available
+                if not summary_generated and AI_RESPONSES_AVAILABLE and ai_responses:
+                    logging.info("📝 Falling back to AI responses service...")
+                    try:
+                        ai_responses.process_meeting_transcript(
+                            meeting_id=meeting.id,
+                            transcript=full_transcript,
+                            twin_id=meeting.digital_twin_id or 1
+                        )
+                        summary_generated = True
+                        action_items_extracted = True
+                    except Exception as ai_error:
+                        logging.warning(f"AI responses service failed: {ai_error}")
+                
+                # If no AI processing succeeded, log warning
+                if not summary_generated:
+                    logging.warning("No AI processing services available - transcript saved without summary")
+                    
+        except Exception as processing_error:
+            logging.warning(f"Transcript processing failed: {processing_error}")
+            # Continue even if processing fails
 
         # Commit all changes
         db.commit()
