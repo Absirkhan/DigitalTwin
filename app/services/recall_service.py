@@ -15,7 +15,9 @@ from app.schemas.meeting import (
     TranscriptDetailResponse,
     MeetingPlatform,
     MeetingStatus,
-    TranscriptChunk
+    TranscriptChunk,
+    RecordingResponse,
+    RecordingInfo
 )
 from app.models.meeting import Meeting
 from app.models.bot import Bot
