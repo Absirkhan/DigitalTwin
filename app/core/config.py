@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     CHUNK_SIZE: int = 1000
     CHUNK_OVERLAP: int = 200
     
+    # Auto-join Settings
+    AUTO_JOIN_ADVANCE_MINUTES: int = 2  # Join meeting 2 minutes before start
+    AUTO_JOIN_CHECK_INTERVAL: int = 30  # Check for meetings every 30 seconds
+    
     model_config = ConfigDict(env_file=".env")
 
 

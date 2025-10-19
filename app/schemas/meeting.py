@@ -70,6 +70,7 @@ class MeetingJoinRequest(BaseModel):
     recording_config: Optional[Dict[str, Any]] = None
     bot_name: Optional[str] = None
     enable_realtime_processing: Optional[bool] = False
+    enable_video_recording: Optional[bool] = False
 
 
 class MeetingResponse(BaseModel):
@@ -151,4 +152,25 @@ class TranscriptDetailResponse(BaseModel):
     success: bool
     message: str
     data: Optional[Any] = None  # Changed from Dict to Any to handle different response structures
+    error_details: Optional[Dict[str, Any]] = None
+
+
+class RecordingInfo(BaseModel):
+    """Recording information from Recall API"""
+    id: str
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    status: Dict[str, Any]
+    media_shortcuts: Optional[Dict[str, Any]] = None
+
+
+class RecordingResponse(BaseModel):
+    """Response for recording operations"""
+    success: bool
+    message: str
+    bot_id: Optional[str] = None
+    recordings: Optional[List[RecordingInfo]] = None
+    download_url: Optional[str] = None
     error_details: Optional[Dict[str, Any]] = None

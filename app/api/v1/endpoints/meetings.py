@@ -32,12 +32,68 @@ except ImportError as e:
     ai_responses = None
     AI_RESPONSES_AVAILABLE = False
 
+# Import your fine-tuned summary service
+try:
+    from app.services.summary_service import generate_meeting_summary, is_summary_service_available
+    SUMMARY_SERVICE_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Summary service not available: {e}")
+    SUMMARY_SERVICE_AVAILABLE = False
+
 from app.models.user import User
 from app.models.bot import Bot
 from app.models.meeting import Meeting
 from app.core.config import settings
 
 router = APIRouter()
+
+
+@router.get("/summary/test")
+async def test_summary_service():
+    """Test endpoint for your fine-tuned summary model"""
+    try:
+        if not SUMMARY_SERVICE_AVAILABLE:
+            return {
+                "success": False,
+                "message": "Summary service not available",
+                "help": "Place your fine-tuned model files in summary_model/ folder"
+            }
+        
+        # Test with sample meeting transcript
+        test_transcript = """
+        John: Good morning everyone, thanks for joining today's project review meeting.
+        Sarah: Hi John, glad to be here. I've prepared the quarterly report.
+        Mike: Morning all. I have the technical updates ready to share.
+        John: Perfect. Sarah, let's start with your quarterly numbers.
+        Sarah: Sure. This quarter we achieved 125% of our target revenue, which is $2.5M total.
+        Mike: That's fantastic! On the technical side, we successfully deployed the new API system.
+        John: Excellent work team. For next quarter, let's focus on expanding to the European market.
+        Sarah: I'll prepare the market analysis by next Friday.
+        Mike: I'll work on the technical infrastructure requirements for Europe.
+        John: Great. Meeting adjourned. Thanks everyone!
+        """
+        
+        result = generate_meeting_summary(test_transcript)
+        
+        return {
+            "success": result["success"],
+            "message": "Summary service test completed",
+            "model_status": "fine-tuned FLAN-T5" if result["success"] else "failed",
+            "test_result": {
+                "original_words": len(test_transcript.split()),
+                "summary_words": result["word_count"],
+                "compression_ratio": f"{result['compression_ratio']:.1%}",
+                "summary": result["summary"]
+            },
+            "service_available": is_summary_service_available()
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Test failed: {str(e)}",
+            "help": "Check if model files are properly placed in summary_model/ folder"
+        }
 
 
 @router.get("/debug/config")
@@ -125,13 +181,16 @@ async def join_meeting(
 @router.post("/join", response_model=MeetingJoinResponse)
 async def join_meeting_with_url(
     request: MeetingJoinRequest,
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Join a meeting using the Recall API and save the bot to the database."""
     try:
-        # Set default bot name if not provided
-        if not request.bot_name:
-            request.bot_name = "Digital Twin Bot"
+        # Get bot name from user's profile, or use provided name, or default
+        bot_name = current_user.bot_name or request.bot_name or "Digital Twin Bot"
+        
+        # Update the request with the determined bot name
+        request.bot_name = bot_name
 
         # 2. Join the meeting via Recall API
         response_data = await recall_service.join_meeting(request)
@@ -140,23 +199,34 @@ async def join_meeting_with_url(
         if response_data.success and response_data.bot_id:
             existing_bot = db.query(Bot).filter(Bot.bot_id == response_data.bot_id).first()
             if not existing_bot:
-                # Use the bot name from request
-                bot_name = request.bot_name
                 new_bot = Bot(
                     bot_id=response_data.bot_id,
-                    user_id=1,  # Using dummy user_id = 1
+                    user_id=current_user.id,  # Use authenticated user's ID
                     bot_name=bot_name,
+                    recording_status="pending" if request.enable_video_recording else "not_requested",
                     # platform and meeting_id can be populated later via webhooks or status checks
                 )
                 db.add(new_bot)
                 db.commit()
+                
+                # If video recording was enabled, note it in the response
+                if request.enable_video_recording:
+                    response_data.message += " (Video recording enabled)"
 
         return response_data
 
     except Exception as e:
         db.rollback()
         logging.error(f"Error in join_meeting: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"An unexpected error occurred: {e}")
+        return MeetingJoinResponse(
+            success=False,
+            message=f"An unexpected error occurred: {str(e)}",
+            bot_id=None,
+            status="error",
+            meeting_url=request.meeting_url,
+            bot_name=request.bot_name,
+            error_details={"error_type": type(e).__name__, "error_message": str(e)}
+        )
 
 
 @router.post("/transcript", response_model=MeetingTranscriptResponse)
@@ -243,26 +313,49 @@ async def receive_meeting_transcript(
             if not bot.meeting_id and meeting:
                 bot.meeting_id = meeting.id
 
-        # Process transcript with AI for summary and action items
+        # Process transcript with your fine-tuned model for summary generation
         summary_generated = False
         action_items_extracted = False
         
         try:
-            if meeting and AI_RESPONSES_AVAILABLE and ai_responses:
-                # Use the AI service to process the transcript
-                ai_responses.process_meeting_transcript(
-                    meeting_id=meeting.id,
-                    transcript=full_transcript,
-                    twin_id=meeting.digital_twin_id or 1  # Use default twin if none specified
-                )
-                summary_generated = True
-                action_items_extracted = True
-            elif meeting:
-                # If AI is not available, just log a warning
-                logging.warning("AI responses service not available - skipping AI processing")
-        except Exception as ai_error:
-            logging.warning(f"AI processing failed for transcript: {ai_error}")
-            # Continue even if AI processing fails
+            if meeting and full_transcript:
+                # Try your fine-tuned model first
+                if SUMMARY_SERVICE_AVAILABLE:
+                    try:
+                        logging.info("🤖 Using fine-tuned FLAN-T5 model for summary generation...")
+                        summary_result = generate_meeting_summary(full_transcript)
+                        
+                        if summary_result["success"]:
+                            meeting.summary = summary_result["summary"]
+                            summary_generated = True
+                            logging.info(f"✅ Summary generated: {summary_result['word_count']} words "
+                                       f"({summary_result['compression_ratio']:.1%} compression)")
+                        else:
+                            logging.warning(f"Fine-tuned model failed: {summary_result['summary']}")
+                    except Exception as model_error:
+                        logging.warning(f"Fine-tuned model error: {model_error}")
+                
+                # Fallback to AI responses if available
+                if not summary_generated and AI_RESPONSES_AVAILABLE and ai_responses:
+                    logging.info("📝 Falling back to AI responses service...")
+                    try:
+                        ai_responses.process_meeting_transcript(
+                            meeting_id=meeting.id,
+                            transcript=full_transcript,
+                            twin_id=meeting.digital_twin_id or 1
+                        )
+                        summary_generated = True
+                        action_items_extracted = True
+                    except Exception as ai_error:
+                        logging.warning(f"AI responses service failed: {ai_error}")
+                
+                # If no AI processing succeeded, log warning
+                if not summary_generated:
+                    logging.warning("No AI processing services available - transcript saved without summary")
+                    
+        except Exception as processing_error:
+            logging.warning(f"Transcript processing failed: {processing_error}")
+            # Continue even if processing fails
 
         # Commit all changes
         db.commit()
@@ -759,4 +852,277 @@ async def get_formatted_transcript(
         raise HTTPException(
             status_code=500, detail=f"Error retrieving formatted transcript: {str(e)}"
         )
+
+
+@router.get("/recording/{bot_id}")
+async def get_recording_status(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Get recording status and information for a bot
+    """
+    try:
+        # Check if bot belongs to current user
+        bot = db.query(Bot).filter(Bot.bot_id == bot_id, Bot.user_id == current_user.id).first()
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot not found or access denied")
+        
+        # Get recording status using recall service
+        status = recall_service.get_recording_status(bot_id, db)
+        
+        if "error" in status:
+            raise HTTPException(status_code=500, detail=status["error"])
+        
+        return status
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error getting recording status: {str(e)}")
+
+
+@router.post("/recording/{bot_id}/update")
+async def update_recording_status(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Update recording status by fetching latest data from Recall API
+    """
+    try:
+        # Check if bot belongs to current user
+        bot = db.query(Bot).filter(Bot.bot_id == bot_id, Bot.user_id == current_user.id).first()
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot not found or access denied")
+        
+        # Update recording status using recall service
+        updated_bot = await recall_service.update_bot_recording_status(bot_id, db)
+        
+        if not updated_bot:
+            raise HTTPException(status_code=500, detail="Failed to update recording status")
+        
+        return {
+            "success": True,
+            "message": "Recording status updated successfully",
+            "bot_id": bot_id,
+            "recording_status": updated_bot.recording_status,
+            "video_recording_url": updated_bot.video_recording_url,
+            "recording_expires_at": updated_bot.recording_expires_at.isoformat() if updated_bot.recording_expires_at else None
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error updating recording status: {str(e)}")
+
+
+@router.post("/recording/{bot_id}/download")
+async def download_recording(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Download and store recording locally
+    """
+    try:
+        # Check if bot belongs to current user
+        bot = db.query(Bot).filter(Bot.bot_id == bot_id, Bot.user_id == current_user.id).first()
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot not found or access denied")
+        
+        # Download recording using recall service
+        local_path = await recall_service.download_and_store_recording(bot_id, db)
+        
+        if not local_path:
+            raise HTTPException(status_code=500, detail="Failed to download recording")
+        
+        return {
+            "success": True,
+            "message": "Recording downloaded successfully",
+            "bot_id": bot_id,
+            "local_path": local_path
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error downloading recording: {str(e)}")
+
+
+@router.post("/recording/{bot_id}/process")
+async def process_completed_recording(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Process a completed recording (update status and download if needed)
+    """
+    try:
+        # Check if bot belongs to current user
+        bot = db.query(Bot).filter(Bot.bot_id == bot_id, Bot.user_id == current_user.id).first()
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot not found or access denied")
+        
+        # Process completed recording using recall service
+        success = await recall_service.process_completed_recording(bot_id, db)
+        
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to process recording")
+        
+        # Get updated status
+        status = recall_service.get_recording_status(bot_id, db)
+        
+        return {
+            "success": True,
+            "message": "Recording processed successfully",
+            "bot_id": bot_id,
+            "status": status
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing recording: {str(e)}")
+
+
+@router.get("/recordings/expired")
+async def check_expired_recordings(
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Check and update expired recording URLs
+    """
+    try:
+        # Check expired recordings using recall service
+        expired_bot_ids = await recall_service.check_and_update_expired_recordings(db)
+        
+        return {
+            "success": True,
+            "message": f"Checked expired recordings, found {len(expired_bot_ids)} expired",
+            "expired_bot_ids": expired_bot_ids
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error checking expired recordings: {str(e)}")
+
+
+@router.post("/webhook/recording-status")
+async def recording_status_webhook(
+    request: dict,
+    db: Session = Depends(get_db)
+):
+    """
+    Webhook endpoint for Recall API recording status updates
+    """
+    try:
+        # Extract bot_id from webhook data
+        bot_id = request.get("data", {}).get("bot", {}).get("id")
+        if not bot_id:
+            raise HTTPException(status_code=400, detail="No bot ID found in webhook data")
+        
+        # Extract event type
+        event_type = request.get("event", {}).get("type")
+        
+        # Log the webhook event
+        logging.info(f"Received recording webhook for bot {bot_id}, event: {event_type}")
+        
+        # Update recording status based on event type using recall service
+        if event_type in ["bot.status_change", "bot.recording.done"]:
+            # Update bot recording status
+            updated_bot = await recall_service.update_bot_recording_status(bot_id, db)
+            
+            if updated_bot and updated_bot.recording_status == "completed":
+                # If recording is completed, process it (download if needed)
+                await recall_service.process_completed_recording(bot_id, db)
+        
+        return {"status": "success", "message": "Webhook processed"}
+        
+    except Exception as e:
+        logging.error(f"Error processing recording webhook: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing webhook: {str(e)}")
+
+
+@router.get("/recording/{bot_id}/download-url")
+async def get_recording_download_url(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Get the recording download URL for a bot and store it in the database.
+    Returns only the download URL.
+    """
+    try:
+        # Check if bot belongs to current user
+        bot = db.query(Bot).filter(Bot.bot_id == bot_id, Bot.user_id == current_user.id).first()
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot not found or access denied")
+        
+        # Get recordings from Recall API
+        recordings_response = await recall_service.list_recordings(bot_id=bot_id, limit=1)
+        
+        if not recordings_response.get("success"):
+            raise HTTPException(status_code=500, detail="Failed to retrieve recordings from Recall API")
+        
+        recordings = recordings_response.get("recordings", [])
+        if not recordings:
+            raise HTTPException(status_code=404, detail="No recordings found for this bot")
+        
+        # Get the most recent recording
+        latest_recording = recordings[0]
+        
+        # Check if recording is completed
+        recording_status = latest_recording.get("status", {}).get("code")
+        if recording_status != "done":
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Recording not ready. Current status: {recording_status}"
+            )
+        
+        # Extract download URL from media_shortcuts
+        media_shortcuts = latest_recording.get("media_shortcuts", {})
+        video_mixed = media_shortcuts.get("video_mixed", {})
+        video_data = video_mixed.get("data", {})
+        download_url = video_data.get("download_url")
+        
+        if not download_url:
+            raise HTTPException(status_code=404, detail="Download URL not found in recording data")
+        
+        # Store the URL in the database
+        bot.video_recording_url = download_url
+        bot.recording_status = "completed"
+        
+        # Store recording metadata
+        bot.recording_data = latest_recording
+        
+        # Set expiration date (URLs typically expire after some time)
+        # The URL in your example expires at timestamp 1760909534
+        completed_at = latest_recording.get("completed_at")
+        if completed_at:
+            from datetime import datetime, timedelta
+            try:
+                completed_time = datetime.fromisoformat(completed_at.replace('Z', '+00:00'))
+                # Assume URLs expire 7 days after completion (adjust as needed)
+                bot.recording_expires_at = completed_time + timedelta(days=7)
+            except:
+                # Fallback: set expiration to 7 days from now
+                bot.recording_expires_at = datetime.utcnow() + timedelta(days=7)
+        
+        db.commit()
+        
+        return {
+            "download_url": download_url
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting recording download URL: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error retrieving download URL: {str(e)}")
 
