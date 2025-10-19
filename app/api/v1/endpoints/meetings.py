@@ -202,7 +202,7 @@ async def join_meeting_with_url(
                 new_bot = Bot(
                     bot_id=response_data.bot_id,
                     user_id=current_user.id,  # Use authenticated user's ID
-                    bot_name=bot_name,
+                    bot_name=request.bot_name,
                     recording_status="pending" if request.enable_video_recording else "not_requested",
                     # platform and meeting_id can be populated later via webhooks or status checks
                 )
@@ -942,6 +942,138 @@ async def toggle_auto_join(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error toggling auto-join: {str(e)}")
+
+
+@router.get("/bot/{bot_id}/recording-url")
+async def get_and_update_recording_url(
+    bot_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Get the recording download URL for a bot and update it in the database
+    """
+    try:
+        # Find the bot in the database
+        bot = db.query(Bot).filter(Bot.bot_id == bot_id).first()
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot not found in database")
+        
+        # Get recordings from Recall API
+        recordings_result = await recall_service.get_bot_recordings(bot_id)
+        
+        if not recordings_result.success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Failed to retrieve recordings: {recordings_result.message}"
+            )
+        
+        if not recordings_result.recordings:
+            raise HTTPException(
+                status_code=404,
+                detail="No recordings found for this bot"
+            )
+        
+        # Get the most recent recording
+        latest_recording = recordings_result.recordings[0]
+        
+        # Extract download URL from video_mixed media shortcut
+        download_url = None
+        if latest_recording.media_shortcuts and "video_mixed" in latest_recording.media_shortcuts:
+            video_data = latest_recording.media_shortcuts["video_mixed"]
+            download_url = video_data.get("data", {}).get("download_url")
+        
+        if not download_url:
+            raise HTTPException(
+                status_code=404,
+                detail="No video download URL found in recording"
+            )
+        
+        # Update the bot in the database
+        bot.video_recording_url = download_url
+        bot.video_download_url = download_url  # Also update this field for compatibility
+        bot.recording_status = "completed"
+        bot.recording_data = {
+            "recording_id": latest_recording.id,
+            "created_at": latest_recording.created_at.isoformat() if latest_recording.created_at else None,
+            "completed_at": latest_recording.completed_at.isoformat() if latest_recording.completed_at else None,
+            "status": latest_recording.status
+        }
+        bot.recording_expires_at = latest_recording.expires_at
+        bot.updated_at = datetime.utcnow()
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "bot_id": bot_id,
+            "download_url": download_url,
+            "recording_id": latest_recording.id,
+            "recording_status": latest_recording.status,
+            "database_updated": True,
+            "expires_at": latest_recording.expires_at.isoformat() if latest_recording.expires_at else None
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Error getting recording URL for bot {bot_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get recording URL: {str(e)}"
+        )
+
+
+@router.get("/bot/{bot_id}/recording-url/simple")
+async def get_recording_url_simple(bot_id: str):
+    """
+    Get just the recording download URL for a bot (without database update)
+    """
+    try:
+        # Get recordings from Recall API
+        recordings_result = await recall_service.get_bot_recordings(bot_id)
+        
+        if not recordings_result.success:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Failed to retrieve recordings: {recordings_result.message}"
+            )
+        
+        if not recordings_result.recordings:
+            raise HTTPException(
+                status_code=404,
+                detail="No recordings found for this bot"
+            )
+        
+        # Get the most recent recording
+        latest_recording = recordings_result.recordings[0]
+        
+        # Extract download URL from video_mixed media shortcut
+        download_url = None
+        if latest_recording.media_shortcuts and "video_mixed" in latest_recording.media_shortcuts:
+            video_data = latest_recording.media_shortcuts["video_mixed"]
+            download_url = video_data.get("data", {}).get("download_url")
+        
+        if not download_url:
+            raise HTTPException(
+                status_code=404,
+                detail="No video download URL found in recording"
+            )
+        
+        return {
+            "success": True,
+            "bot_id": bot_id,
+            "download_url": download_url
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting recording URL for bot {bot_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get recording URL: {str(e)}"
+        )
 
 
 @router.get("/auto-join/status")
