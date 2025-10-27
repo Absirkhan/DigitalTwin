@@ -50,7 +50,6 @@ class MeetingCreate(BaseModel):
     platform: str
     scheduled_time: datetime
     duration_minutes: Optional[int] = 60
-    digital_twin_id: Optional[int] = None
     auto_join: Optional[bool] = True
 
 
@@ -60,7 +59,6 @@ class MeetingUpdate(BaseModel):
     meeting_url: Optional[str] = None
     scheduled_time: Optional[datetime] = None
     duration_minutes: Optional[int] = None
-    digital_twin_id: Optional[int] = None
     auto_join: Optional[bool] = None
     status: Optional[str] = None
 
@@ -175,3 +173,21 @@ class RecordingResponse(BaseModel):
     recordings: Optional[List[RecordingInfo]] = None
     download_url: Optional[str] = None
     error_details: Optional[Dict[str, Any]] = None
+
+
+class SummarizationRequest(BaseModel):
+    """Request for text summarization"""
+    text: str
+    max_length: Optional[int] = 512
+    min_length: Optional[int] = 50
+    is_meeting_transcript: Optional[bool] = True
+
+
+class SummarizationResponse(BaseModel):
+    """Response for summarization operations"""
+    success: bool
+    summary: Optional[str] = None
+    action_items: Optional[str] = None
+    key_decisions: Optional[str] = None
+    error: Optional[str] = None
+    metrics: Optional[Dict[str, Any]] = None

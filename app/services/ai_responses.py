@@ -29,6 +29,9 @@ except ImportError:
         from langchain.chains import RetrievalQA
         from langchain.document_loaders import TextLoader
 
+# Import our local summarization service
+from app.services.summarization import generate_meeting_summary
+
 from app.core.config import settings
 from app.core.celery import celery_app
 
@@ -159,25 +162,44 @@ def generate_meeting_response(message: str, twin_id: int, context: Dict = None) 
 def process_meeting_transcript(meeting_id: int, transcript: str, twin_id: int):
     """Process meeting transcript and update knowledge base"""
     try:
-        generator = RAGResponseGenerator(twin_id)
+        # Use our local summarization model
+        summary_result = generate_meeting_summary(transcript)
         
-        # Add transcript to knowledge base
-        generator.add_documents([transcript])
-        
-        # Generate meeting summary
-        summary_query = f"Summarize the key points from this meeting transcript: {transcript}"
-        summary = generator.generate_response(summary_query)
-        
-        # Extract action items
-        action_query = f"Extract action items and next steps from this meeting transcript: {transcript}"
-        action_items = generator.generate_response(action_query)
-        
-        return {
-            'meeting_id': meeting_id,
-            'summary': summary,
-            'action_items': action_items,
-            'status': 'completed'
-        }
+        if summary_result["status"] == "success":
+            # Initialize RAG generator for knowledge base updates
+            generator = RAGResponseGenerator(twin_id)
+            
+            # Add transcript to knowledge base
+            generator.add_documents([transcript])
+            
+            return {
+                'meeting_id': meeting_id,
+                'summary': summary_result["summary"],
+                'action_items': summary_result["action_items"],
+                'key_decisions': summary_result["key_decisions"],
+                'status': 'completed'
+            }
+        else:
+            # Fallback to RAG if local model fails
+            generator = RAGResponseGenerator(twin_id)
+            generator.add_documents([transcript])
+            
+            # Generate meeting summary using RAG as fallback
+            summary_query = f"Summarize the key points from this meeting transcript: {transcript}"
+            summary = generator.generate_response(summary_query)
+            
+            # Extract action items
+            action_query = f"Extract action items and next steps from this meeting transcript: {transcript}"
+            action_items = generator.generate_response(action_query)
+            
+            return {
+                'meeting_id': meeting_id,
+                'summary': summary,
+                'action_items': action_items,
+                'key_decisions': None,
+                'status': 'completed_with_fallback',
+                'fallback_reason': summary_result.get("error", "Unknown error with local model")
+            }
         
     except Exception as e:
         print(f"Error processing transcript: {e}")

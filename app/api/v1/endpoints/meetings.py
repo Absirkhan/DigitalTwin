@@ -11,7 +11,8 @@ import logging
 from app.core.database import get_db
 from app.schemas.meeting import (
     MeetingCreate, MeetingResponse, MeetingUpdate, MeetingJoinRequest, MeetingJoinResponse,
-    MeetingTranscriptRequest, MeetingTranscriptResponse, TranscriptGetResponse, TranscriptDetailResponse
+    MeetingTranscriptRequest, MeetingTranscriptResponse, TranscriptGetResponse, TranscriptDetailResponse,
+    SummarizationRequest, SummarizationResponse
 )
 from app.services.auth import get_current_user_bearer
 from app.services.meeting import (
@@ -39,7 +40,7 @@ except ImportError as e:
 
 # Import your fine-tuned summary service
 try:
-    from app.services.summary_service import generate_meeting_summary, is_summary_service_available
+    from app.services.summarization import generate_meeting_summary, get_summarization_service
     SUMMARY_SERVICE_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Summary service not available: {e}")
@@ -61,7 +62,7 @@ async def test_summary_service():
             return {
                 "success": False,
                 "message": "Summary service not available",
-                "help": "Place your fine-tuned model files in summary_model/ folder"
+                "help": "Place your fine-tuned model files in models/weights/ folder"
             }
         
         # Test with sample meeting transcript
@@ -80,25 +81,105 @@ async def test_summary_service():
         
         result = generate_meeting_summary(test_transcript)
         
+        # Calculate some metrics for the test
+        original_words = len(test_transcript.split())
+        summary_words = len(result["summary"].split()) if result["summary"] else 0
+        compression_ratio = summary_words / original_words if original_words > 0 else 0
+        
         return {
-            "success": result["success"],
+            "success": result["status"] == "success",
             "message": "Summary service test completed",
-            "model_status": "fine-tuned FLAN-T5" if result["success"] else "failed",
+            "model_status": "fine-tuned FLAN-T5" if result["status"] == "success" else "failed",
             "test_result": {
-                "original_words": len(test_transcript.split()),
-                "summary_words": result["word_count"],
-                "compression_ratio": f"{result['compression_ratio']:.1%}",
-                "summary": result["summary"]
+                "original_words": original_words,
+                "summary_words": summary_words,
+                "compression_ratio": f"{compression_ratio:.1%}",
+                "summary": result["summary"],
+                "action_items": result["action_items"],
+                "key_decisions": result["key_decisions"]
             },
-            "service_available": is_summary_service_available()
+            "service_available": SUMMARY_SERVICE_AVAILABLE
         }
         
     except Exception as e:
         return {
             "success": False,
             "message": f"Test failed: {str(e)}",
-            "help": "Check if model files are properly placed in summary_model/ folder"
+            "help": "Check if model files are properly placed in models/weights/ folder"
         }
+
+
+@router.post("/summarize", response_model=SummarizationResponse)
+async def summarize_text(
+    request: SummarizationRequest,
+    current_user: User = Depends(get_current_user_bearer)
+):
+    """
+    Generate summary using the fine-tuned FLAN-T5 model
+    """
+    try:
+        if not SUMMARY_SERVICE_AVAILABLE:
+            return SummarizationResponse(
+                success=False,
+                error="Summarization service not available. Check if model files are in models/weights/ folder."
+            )
+        
+        # Calculate input metrics
+        original_words = len(request.text.split())
+        
+        if request.is_meeting_transcript:
+            # Use the full meeting summary function
+            result = generate_meeting_summary(request.text)
+            
+            if result["status"] == "success":
+                summary_words = len(result["summary"].split()) if result["summary"] else 0
+                
+                return SummarizationResponse(
+                    success=True,
+                    summary=result["summary"],
+                    action_items=result["action_items"],
+                    key_decisions=result["key_decisions"],
+                    metrics={
+                        "original_words": original_words,
+                        "summary_words": summary_words,
+                        "compression_ratio": summary_words / original_words if original_words > 0 else 0,
+                        "model_used": "fine-tuned FLAN-T5"
+                    }
+                )
+            else:
+                return SummarizationResponse(
+                    success=False,
+                    error=result.get("error", "Unknown error occurred")
+                )
+        else:
+            # Use simple summarization
+            service = get_summarization_service()
+            summary = service.generate_summary(
+                request.text,
+                max_length=request.max_length,
+                min_length=request.min_length,
+                is_meeting_transcript=False
+            )
+            
+            summary_words = len(summary.split()) if summary else 0
+            
+            return SummarizationResponse(
+                success=True,
+                summary=summary,
+                metrics={
+                    "original_words": original_words,
+                    "summary_words": summary_words,
+                    "compression_ratio": summary_words / original_words if original_words > 0 else 0,
+                    "model_used": "fine-tuned FLAN-T5"
+                }
+            )
+            
+    except Exception as e:
+        logger.error(f"Error in summarization: {e}")
+        return SummarizationResponse(
+            success=False,
+            error=f"Summarization failed: {str(e)}"
+        )
 
 
 @router.get("/debug/config")
@@ -112,39 +193,33 @@ async def debug_config():
     }
 
 
-@router.post("/debug/test-auth")
-async def test_recall_auth():
-    """Test Recall API authentication"""
-    return await recall_service.test_authentication()
-
-
 @router.post("/", response_model=MeetingResponse)
 async def create_meeting_schedule(
     meeting: MeetingCreate,
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Schedule a meeting for digital twin attendance"""
-    # return await create_meeting(db, meeting, current_user.id)
-    return await create_meeting(db, meeting, 1)  # Using dummy user_id = 1
+    return await create_meeting(db, meeting, current_user.id)
 
 
 @router.get("/", response_model=List[MeetingResponse])
 async def get_my_meetings(
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Get all meetings for current user"""
-    # return await get_user_meetings(db, current_user.id)
-    return await get_user_meetings(db, 1)  # Using dummy user_id = 1
+    return await get_user_meetings(db, current_user.id)
 
 
 @router.get("/{meeting_id}", response_model=MeetingResponse)
 async def get_meeting_details(
     meeting_id: int,
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Get specific meeting details"""
-    # meeting = await get_meeting(db, meeting_id, current_user.id)
-    meeting = await get_meeting(db, meeting_id, 1)  # Using dummy user_id = 1
+    meeting = await get_meeting(db, meeting_id, current_user.id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting not found")
     return meeting
@@ -154,21 +229,21 @@ async def get_meeting_details(
 async def update_meeting_schedule(
     meeting_id: int,
     meeting_update: MeetingUpdate,
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Update meeting schedule"""
-    # return await update_meeting(db, meeting_id, meeting_update, current_user.id)
-    return await update_meeting(db, meeting_id, meeting_update, 1)  # Using dummy user_id = 1
+    return await update_meeting(db, meeting_id, meeting_update, current_user.id)
 
 
 @router.delete("/{meeting_id}")
 async def delete_meeting_schedule(
     meeting_id: int,
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Delete meeting schedule"""
-    # await delete_meeting(db, meeting_id, current_user.id)
-    await delete_meeting(db, meeting_id, 1)  # Using dummy user_id = 1
+    await delete_meeting(db, meeting_id, current_user.id)
     return {"message": "Meeting deleted successfully"}
 
 
@@ -384,14 +459,21 @@ async def receive_meeting_transcript(
 @router.get("/transcript/{bot_id}")
 async def get_meeting_transcript(
     bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Get the transcript for a meeting by bot ID"""
     try:
-        # Find the bot first
-        bot = db.query(Bot).filter(Bot.bot_id == bot_id).first()
+        # Find the bot first and verify it belongs to the current user
+        bot = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
         if not bot:
-            raise HTTPException(status_code=404, detail="Bot not found")
+            raise HTTPException(
+                status_code=404, 
+                detail="Bot not found or you don't have permission to access it"
+            )
         
         # Find the associated meeting
         meeting = None
@@ -426,90 +508,6 @@ async def get_meeting_transcript(
             status_code=500,
             detail=f"Failed to retrieve transcript: {str(e)}"
         )
-
-
-@router.get("/{meeting_id}/transcript")
-async def get_meeting_transcript_by_meeting_id(
-    meeting_id: int,
-    db: Session = Depends(get_db)
-):
-    """Get the transcript for a specific meeting by meeting ID"""
-    try:
-        meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
-        
-        if not meeting:
-            raise HTTPException(status_code=404, detail="Meeting not found")
-        
-        if not meeting.transcript:
-            raise HTTPException(status_code=404, detail="No transcript available for this meeting")
-        
-        # Find associated bot if any
-        bot = db.query(Bot).filter(Bot.meeting_id == meeting_id).first()
-        
-        return {
-            "bot_id": bot.bot_id if bot else None,
-            "meeting_id": meeting.id,
-            "title": meeting.title,
-            "meeting_url": meeting.meeting_url,
-            "platform": meeting.platform,
-            "transcript": meeting.transcript,
-            "summary": meeting.summary,
-            "action_items": meeting.action_items,
-            "participants": meeting.participants,
-            "created_at": meeting.created_at,
-            "updated_at": meeting.updated_at
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Error retrieving transcript: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve transcript: {str(e)}"
-        )
-
-
-@router.get("/transcripts/all")
-async def get_all_transcripts(
-    db: Session = Depends(get_db)
-):
-    """Get all meetings with transcripts for the current user"""
-    try:
-        # meetings = db.query(Meeting).filter(
-        #     Meeting.user_id == current_user.id,
-        #     Meeting.transcript.isnot(None)
-        # ).all()
-        meetings = db.query(Meeting).filter(Meeting.transcript.isnot(None)).all()  # Using dummy user access
-        
-        transcripts = []
-        for meeting in meetings:
-            transcripts.append({
-                "meeting_id": meeting.id,
-                "title": meeting.title,
-                "meeting_url": meeting.meeting_url,
-                "platform": meeting.platform,
-                "scheduled_time": meeting.scheduled_time,
-                "status": meeting.status,
-                "transcript_available": bool(meeting.transcript),
-                "summary_available": bool(meeting.summary),
-                "action_items_available": bool(meeting.action_items),
-                "created_at": meeting.created_at,
-                "updated_at": meeting.updated_at
-            })
-        
-        return {
-            "total_transcripts": len(transcripts),
-            "transcripts": transcripts
-        }
-        
-    except Exception as e:
-        logging.error(f"Error retrieving transcripts: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve transcripts: {str(e)}"
-        )
-
 
 # MAIN ENDPOINT: Get transcripts filtered by bot ID (replaces old implementation)
 @router.get("/recall/transcripts/{bot_id}", response_model=TranscriptGetResponse)
@@ -588,29 +586,31 @@ async def get_transcripts_by_bot_id(bot_id: str, include_content: bool = False):
         )
 
 
-# Updated endpoints using the comprehensive RecallAPIService
-
-@router.get("/recall/comprehensive/{bot_id}")
-async def get_comprehensive_meeting_data(bot_id: str):
-    """Get comprehensive meeting data including recordings, transcripts, and metadata"""
-    try:
-        result = await recall_service.get_comprehensive_meeting_data(bot_id)
-        return result
-    except Exception as e:
-        logging.error(f"Error retrieving comprehensive data for bot {bot_id}: {e}", exc_info=True)
-        return {
-            "success": False,
-            "error": f"Failed to retrieve comprehensive data: {str(e)}",
-            "bot_id": bot_id
-        }
-
 
 @router.get("/recall/bot/{bot_id}/status")
-async def get_bot_status(bot_id: str):
+async def get_bot_status(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
     """Get the current status of a bot"""
     try:
+        # Verify the bot belongs to the current user
+        bot = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
+        
+        if not bot:
+            raise HTTPException(
+                status_code=404,
+                detail="Bot not found or you don't have permission to access it"
+            )
+        
         result = await recall_service.get_bot_status(bot_id)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Error retrieving bot status for {bot_id}: {e}", exc_info=True)
         return {
@@ -678,11 +678,29 @@ async def fetch_transcript_content(transcript_id: str):
 
 
 @router.post("/recall/bot/{bot_id}/stop")
-async def stop_bot(bot_id: str):
+async def stop_bot(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
     """Stop a bot and end the meeting recording"""
     try:
+        # Verify the bot belongs to the current user
+        bot = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
+        
+        if not bot:
+            raise HTTPException(
+                status_code=404,
+                detail="Bot not found or you don't have permission to stop it"
+            )
+        
         result = await recall_service.stop_bot(bot_id)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"Error stopping bot {bot_id}: {e}", exc_info=True)
         return {
@@ -724,12 +742,26 @@ async def store_comprehensive_transcript(bot_id: str, storage_path: str = "trans
 
 @router.get("/bot/{bot_id}/transcript")
 async def get_bot_transcript(
-    bot_id: str
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
 ):
     """
     Get the complete transcript for a meeting using official Recall API endpoints
     """
     try:
+        # Verify the bot belongs to the current user
+        bot = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
+        
+        if not bot:
+            raise HTTPException(
+                status_code=404,
+                detail="Bot not found or you don't have permission to access it"
+            )
+        
         # First, get the list of transcripts for this bot
         transcripts_result = await recall_service.list_transcripts(bot_id=bot_id)
 
@@ -787,12 +819,26 @@ async def get_bot_transcript(
 
 @router.get("/bot/{bot_id}/transcript/formatted")
 async def get_formatted_transcript(
-    bot_id: str
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
 ):
     """
     Get the formatted transcript for a meeting by fetching from the download URL
     """
     try:
+        # Verify the bot belongs to the current user
+        bot = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
+        
+        if not bot:
+            raise HTTPException(
+                status_code=404,
+                detail="Bot not found or you don't have permission to access it"
+            )
+        
         # First, get the list of transcripts for this bot
         transcripts_result = await recall_service.list_transcripts(bot_id=bot_id)
 
@@ -838,6 +884,7 @@ async def get_formatted_transcript(
             "transcript_id": latest_transcript.get("id"),
             "download_url": download_url,
             "formatted_transcript": formatted_result["formatted_transcript"],
+            "clean_continuous_text": formatted_result["formatted_transcript"].get("clean_continuous_text", ""),
             "statistics": formatted_result["statistics"],
             "metadata": {
                 "transcript_status": latest_transcript.get("status"),
@@ -854,47 +901,19 @@ async def get_formatted_transcript(
         )
 
 
-# Auto-join management endpoints
-@router.get("/auto-join/upcoming")
-async def get_upcoming_auto_join_meetings_endpoint(
-    db: Session = Depends(get_db)
-):
-    """Get meetings scheduled for auto-join in the next 2 hours"""
-    try:
-        # For development, using user_id=1. In production, get from auth
-        user_id = get_current_user_bearer().id if False else 1  # Replace with get_current_user() in production
-        
-        meetings = get_upcoming_auto_join_meetings(user_id)
-        
-        return {
-            "success": True,
-            "count": len(meetings),
-            "meetings": [
-                {
-                    "id": meeting.id,
-                    "title": meeting.title,
-                    "scheduled_time": meeting.scheduled_time,
-                    "meeting_url": meeting.meeting_url,
-                    "platform": meeting.platform,
-                    "status": meeting.status,
-                    "auto_join": meeting.auto_join,
-                    "digital_twin_id": meeting.digital_twin_id
-                }
-                for meeting in meetings
-            ]
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting upcoming meetings: {str(e)}")
-
-
 @router.post("/{meeting_id}/force-join")
 async def force_join_meeting_endpoint(
     meeting_id: int,
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Manually trigger auto-join for a specific meeting"""
     try:
+        # Verify the meeting belongs to the current user
+        meeting = await get_meeting(db, meeting_id, current_user.id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+        
         result = force_join_meeting(meeting_id)
         
         if result["status"] == "failed":
@@ -917,25 +936,44 @@ async def force_join_meeting_endpoint(
 async def toggle_auto_join(
     meeting_id: int,
     auto_join: bool,
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """Toggle auto-join setting for a meeting"""
     try:
-        # For development, using user_id=1. In production, get from auth
-        user_id = get_current_user_bearer().id if False else 1
-        
-        meeting = await get_meeting(db, meeting_id, user_id)
+        meeting = await get_meeting(db, meeting_id, current_user.id)
         if not meeting:
             raise HTTPException(status_code=404, detail="Meeting not found")
         
+        # Store original status for comparison
+        original_status = meeting.status
+        
+        # Only update the auto_join field
         meeting.auto_join = auto_join
         db.commit()
+        db.refresh(meeting)
+        
+        # Check if the meeting is within the auto-join window
+        from datetime import datetime, timedelta
+        from app.core.config import settings
+        
+        now = datetime.utcnow()
+        join_window_start = now
+        join_window_end = now + timedelta(minutes=settings.AUTO_JOIN_ADVANCE_MINUTES)
+        
+        warning_message = ""
+        if (auto_join and meeting.scheduled_time >= join_window_start and 
+            meeting.scheduled_time <= join_window_end and original_status == "scheduled"):
+            warning_message = f" Note: Meeting is within auto-join window ({settings.AUTO_JOIN_ADVANCE_MINUTES} minutes), so it may be automatically joined soon by the background scheduler."
         
         return {
             "success": True,
-            "message": f"Auto-join {'enabled' if auto_join else 'disabled'} for meeting {meeting_id}",
+            "message": f"Auto-join {'enabled' if auto_join else 'disabled'} for meeting {meeting_id}{warning_message}",
             "meeting_id": meeting_id,
-            "auto_join": auto_join
+            "auto_join": auto_join,
+            "status": meeting.status,
+            "scheduled_time": meeting.scheduled_time,
+            "auto_join_advance_minutes": settings.AUTO_JOIN_ADVANCE_MINUTES
         }
         
     except HTTPException:
@@ -947,16 +985,23 @@ async def toggle_auto_join(
 @router.get("/bot/{bot_id}/recording-url")
 async def get_and_update_recording_url(
     bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
     db: Session = Depends(get_db)
 ):
     """
     Get the recording download URL for a bot and update it in the database
     """
     try:
-        # Find the bot in the database
-        bot = db.query(Bot).filter(Bot.bot_id == bot_id).first()
+        # Find the bot in the database and verify it belongs to the current user
+        bot = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
         if not bot:
-            raise HTTPException(status_code=404, detail="Bot not found in database")
+            raise HTTPException(
+                status_code=404, 
+                detail="Bot not found in database or you don't have permission to access it"
+            )
         
         # Get recordings from Recall API
         recordings_result = await recall_service.get_bot_recordings(bot_id)
@@ -1025,11 +1070,27 @@ async def get_and_update_recording_url(
 
 
 @router.get("/bot/{bot_id}/recording-url/simple")
-async def get_recording_url_simple(bot_id: str):
+async def get_recording_url_simple(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
     """
     Get just the recording download URL for a bot (without database update)
     """
     try:
+        # Verify the bot belongs to the current user
+        bot = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
+        
+        if not bot:
+            raise HTTPException(
+                status_code=404,
+                detail="Bot not found or you don't have permission to access it"
+            )
+        
         # Get recordings from Recall API
         recordings_result = await recall_service.get_bot_recordings(bot_id)
         
@@ -1074,57 +1135,3 @@ async def get_recording_url_simple(bot_id: str):
             status_code=500,
             detail=f"Failed to get recording URL: {str(e)}"
         )
-
-
-@router.get("/auto-join/status")
-async def get_auto_join_status():
-    """Get auto-join system status and configuration"""
-    from app.core.config import settings
-    
-    # Check if services are running
-    service_status = auto_join_manager.is_running()
-    
-    return {
-        "success": True,
-        "auto_join_enabled": True,
-        "services": service_status,
-        "check_interval_seconds": settings.AUTO_JOIN_CHECK_INTERVAL,
-        "advance_minutes": settings.AUTO_JOIN_ADVANCE_MINUTES,
-        "message": "Auto-join system configuration"
-    }
-
-
-@router.post("/auto-join/start-services")
-async def start_auto_join_services():
-    """Start auto-join background services (Celery worker and beat)"""
-    try:
-        result = auto_join_manager.start_all()
-        
-        if result:
-            return {
-                "success": True,
-                "message": "Auto-join services started successfully",
-                "services": auto_join_manager.is_running()
-            }
-        else:
-            raise HTTPException(status_code=500, detail="Failed to start auto-join services")
-            
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error starting services: {str(e)}")
-
-
-@router.post("/auto-join/stop-services")
-async def stop_auto_join_services():
-    """Stop auto-join background services"""
-    try:
-        result = auto_join_manager.stop_all()
-        
-        return {
-            "success": True,
-            "message": "Auto-join services stopped",
-            "services": auto_join_manager.is_running()
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error stopping services: {str(e)}")
-
