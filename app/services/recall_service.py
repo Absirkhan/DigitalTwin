@@ -76,10 +76,18 @@ class RecallAPIService:
                 hasattr(request, "enable_realtime_processing")
                 and request.enable_realtime_processing
             ):
+                # Use dedicated websocket URL from settings
+                websocket_url = getattr(settings, 'RECALL_WEBSOCKET_URL', None)
+                
+                # If no specific websocket URL, construct from base URL
+                if not websocket_url:
+                    websocket_base_url = settings.RECALL_BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
+                    websocket_url = f"{websocket_base_url}/realtime"
+                
                 payload["recording_config"]["realtime_endpoints"] = [
                     {
                         "type": "websocket",
-                        "url": f"{settings.RECALL_BASE_URL}/webhooks/realtime",
+                        "url": websocket_url,
                         "events": [
                             "transcript.data",  # Real-time transcript events
                             "audio_mixed_raw.data",  # Real-time audio events
@@ -992,6 +1000,7 @@ class RecallAPIService:
         """
         formatted_chunks = []
         continuous_text = []
+        clean_continuous_text = []  # New: cleaned version without timestamps
         participants = {}
         
         for chunk in raw_data:
@@ -1047,8 +1056,13 @@ class RecallAPIService:
                 participants[participant_id]["total_words"] += len(text.split())
                 participants[participant_id]["total_speaking_time"] += duration
                 
-                # Add to continuous text
+                # Add to continuous text (with timestamps)
                 continuous_text.append(f"[{start_formatted}] {participant_name}: {text}")
+                
+                # Add to clean continuous text (without timestamps, proper formatting)
+                clean_text = text.strip()
+                if clean_text:
+                    clean_continuous_text.append(f"{participant_name}: {clean_text}")
         
         # Sort chunks by start time
         formatted_chunks.sort(key=lambda x: x["start_relative"])
@@ -1056,6 +1070,7 @@ class RecallAPIService:
         return {
             "chunks": formatted_chunks,
             "continuous_text": "\n".join(continuous_text),
+            "clean_continuous_text": "\n".join(clean_continuous_text),  # New: cleaned version
             "participants": participants,
             "total_chunks": len(formatted_chunks)
         }

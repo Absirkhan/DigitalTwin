@@ -109,7 +109,7 @@ def join_meeting_auto(meeting_id: int, twin_id: int, meeting_url: str, platform:
             join_request = MeetingJoinRequest(
                 meeting_url=meeting_url,
                 bot_name=bot_name,
-                enable_realtime_processing=True
+                enable_realtime_processing=False  # Disable to avoid websocket issues
             )
             
             # Join the meeting using Recall AI

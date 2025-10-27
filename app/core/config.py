@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     # Recall AI
     RECALL_API_KEY: str = ""
     RECALL_BASE_URL: str = "https://us-west-2.recall.ai/api/v1"
+    RECALL_WEBSOCKET_URL: str = "wss://us-west-2.recall.ai/api/v1/realtime"
     
     # Voice Settings
     VOICE_MODEL_PATH: str = "models/voice/"
