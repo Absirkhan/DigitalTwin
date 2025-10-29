@@ -1067,10 +1067,47 @@ class RecallAPIService:
         # Sort chunks by start time
         formatted_chunks.sort(key=lambda x: x["start_relative"])
         
+        # Create speaker segments for easier frontend consumption
+        speaker_segments = []
+        current_speaker = None
+        current_text = []
+        
+        for chunk in formatted_chunks:
+            speaker_name = chunk["participant_name"]
+            text = chunk["text"]
+            
+            if speaker_name == current_speaker:
+                # Continue building current speaker's segment
+                current_text.append(text)
+            else:
+                # Save previous speaker's segment
+                if current_speaker is not None and current_text:
+                    speaker_segments.append({
+                        "speaker": current_speaker,
+                        "text": " ".join(current_text).strip(),
+                        "timestamp": None
+                    })
+                # Start new speaker's segment
+                current_speaker = speaker_name
+                current_text = [text]
+        
+        # Don't forget the last segment
+        if current_speaker is not None and current_text:
+            speaker_segments.append({
+                "speaker": current_speaker,
+                "text": " ".join(current_text).strip(),
+                "timestamp": None
+            })
+        
+        # Calculate total words
+        total_words = sum(len(chunk["text"].split()) for chunk in formatted_chunks)
+        
         return {
             "chunks": formatted_chunks,
             "continuous_text": "\n".join(continuous_text),
             "clean_continuous_text": "\n".join(clean_continuous_text),  # New: cleaned version
+            "speaker_segments": speaker_segments,  # New: for easier frontend display
+            "total_words": total_words,  # New: total word count
             "participants": participants,
             "total_chunks": len(formatted_chunks)
         }

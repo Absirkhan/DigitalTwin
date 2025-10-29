@@ -59,9 +59,29 @@ async def create_meeting(db: Session, meeting: MeetingCreate, user_id: int) -> M
     return db_meeting
 
 
-async def get_user_meetings(db: Session, user_id: int) -> List[Meeting]:
-    """Get all meetings for a user"""
-    return db.query(Meeting).filter(Meeting.user_id == user_id).all()
+async def get_user_meetings(
+    db: Session, 
+    user_id: int, 
+    from_date: Optional[datetime] = None, 
+    to_date: Optional[datetime] = None,
+    order_by: str = "desc"
+) -> List[Meeting]:
+    """Get all meetings for a user with optional date filtering and ordering"""
+    query = db.query(Meeting).filter(Meeting.user_id == user_id)
+    
+    if from_date:
+        query = query.filter(Meeting.scheduled_time >= from_date)
+    
+    if to_date:
+        query = query.filter(Meeting.scheduled_time <= to_date)
+    
+    # Apply ordering - default to newest first (desc)
+    if order_by.lower() == "asc":
+        query = query.order_by(Meeting.scheduled_time.asc())
+    else:
+        query = query.order_by(Meeting.scheduled_time.desc())
+    
+    return query.all()
 
 
 async def get_meeting(db: Session, meeting_id: int, user_id: int) -> Optional[Meeting]:
