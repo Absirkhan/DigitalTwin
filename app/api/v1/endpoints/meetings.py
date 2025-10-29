@@ -4,7 +4,7 @@ Meeting management endpoints
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 import logging
 
@@ -14,6 +14,7 @@ from app.schemas.meeting import (
     MeetingTranscriptRequest, MeetingTranscriptResponse, TranscriptGetResponse, TranscriptDetailResponse,
     SummarizationRequest, SummarizationResponse
 )
+from app.schemas.bot import BotResponse, BotDetailResponse, BotsListResponse
 from app.services.auth import get_current_user_bearer
 from app.services.meeting import (
     create_meeting,
@@ -52,6 +53,309 @@ from app.models.meeting import Meeting
 from app.core.config import settings
 
 router = APIRouter()
+
+
+async def auto_sync_bot_with_recall(bot: Bot, db: Session, user_id: int) -> Bot:
+    """
+    Helper function to automatically sync a bot with Recall metadata.
+    Returns the updated bot object.
+    """
+    try:
+        # Skip if bot already has a meeting_id and recent update
+        if bot.meeting_id and bot.updated_at:
+            # Skip if updated within last hour to avoid excessive API calls
+            from datetime import timedelta
+            if datetime.utcnow() - bot.updated_at < timedelta(hours=1):
+                return bot
+        
+        # Get bot metadata from Recall API
+        bot_status_result = await recall_service.get_bot_status(bot.bot_id)
+        
+        if not bot_status_result:
+            return bot  # Return original if can't get status
+        
+        # Extract meeting information from Recall metadata
+        meeting_url_data = bot_status_result.get("meeting_url", {})
+        recall_meeting_id = meeting_url_data.get("meeting_id")
+        platform = meeting_url_data.get("platform")
+        bot_name = bot_status_result.get("bot_name")
+        join_time = bot_status_result.get("join_at")
+        
+        # Try to find matching meeting in database if not already linked
+        if not bot.meeting_id and recall_meeting_id:
+            # Method 1: Try to find by meeting URL containing the meeting ID
+            matching_meeting = db.query(Meeting).filter(
+                Meeting.user_id == user_id,
+                Meeting.meeting_url.contains(recall_meeting_id)
+            ).first()
+            
+            if not matching_meeting and platform and join_time:
+                # Method 2: Try to find by platform and approximate time
+                try:
+                    from datetime import timedelta
+                    join_datetime = datetime.fromisoformat(join_time.replace('Z', '+00:00'))
+                    time_window = timedelta(hours=1)
+                    
+                    matching_meeting = db.query(Meeting).filter(
+                        Meeting.user_id == user_id,
+                        Meeting.platform == platform,
+                        Meeting.scheduled_time >= join_datetime - time_window,
+                        Meeting.scheduled_time <= join_datetime + time_window
+                    ).first()
+                except Exception:
+                    pass  # Skip time-based matching if parsing fails
+            
+            # Associate bot with found meeting
+            if matching_meeting:
+                bot.meeting_id = matching_meeting.id
+        
+        # Update bot with platform from Recall if not set
+        if platform and not bot.platform:
+            bot.platform = platform
+        
+        # Update bot name if different and not empty
+        if bot_name and bot.bot_name != bot_name:
+            bot.bot_name = bot_name
+        
+        # Update timestamp
+        bot.updated_at = datetime.utcnow()
+        
+        return bot
+        
+    except Exception as e:
+        logging.warning(f"Auto-sync failed for bot {bot.bot_id}: {e}")
+        return bot  # Return original bot if sync fails
+
+
+@router.get("/bots", response_model=BotsListResponse)
+async def get_my_bots(
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db),
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    order_by: str = "desc",
+    include_meeting_details: bool = False,
+    auto_sync_recall: bool = True,
+    limit: int = 50,
+    offset: int = 0
+):
+    """Get all bots for current user with optional date filtering and ordering
+    
+    Args:
+        from_date: Start date filter (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+        to_date: End date filter (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+        order_by: Sort order - 'desc' for newest first (default), 'asc' for oldest first
+        include_meeting_details: Include associated meeting title and URL in response
+        auto_sync_recall: Automatically sync bots with Recall metadata (default: True)
+        limit: Maximum number of results to return
+        offset: Number of results to skip
+    """
+    try:
+        # Start with base query for user's bots
+        query = db.query(Bot).filter(Bot.user_id == current_user.id)
+        
+        # Apply date filtering if provided
+        filters_applied = {}
+        if from_date:
+            try:
+                from_datetime = datetime.fromisoformat(from_date.replace('Z', '+00:00'))
+                query = query.filter(Bot.created_at >= from_datetime)
+                filters_applied['from_date'] = from_date
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Invalid from_date format. Use ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS"
+                )
+        
+        if to_date:
+            try:
+                to_datetime = datetime.fromisoformat(to_date.replace('Z', '+00:00'))
+                query = query.filter(Bot.created_at <= to_datetime)
+                filters_applied['to_date'] = to_date
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Invalid to_date format. Use ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS"
+                )
+        
+        # Validate order_by parameter
+        if order_by.lower() not in ["asc", "desc"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid order_by value. Use 'asc' for oldest first or 'desc' for newest first"
+            )
+        
+        # Get total count for user's bots (without date filter)
+        total_count = db.query(Bot).filter(Bot.user_id == current_user.id).count()
+        
+        # Apply ordering and pagination
+        if order_by.lower() == "asc":
+            filtered_query = query.order_by(Bot.created_at.asc())
+        else:
+            filtered_query = query.order_by(Bot.created_at.desc())
+            
+        filtered_count = filtered_query.count()
+        bots = filtered_query.offset(offset).limit(limit).all()
+        
+        # Auto-sync bots with Recall metadata if requested
+        synced_bots = []
+        sync_stats = {"attempted": 0, "successful": 0, "failed": 0}
+        
+        if auto_sync_recall:
+            for bot in bots:
+                try:
+                    sync_stats["attempted"] += 1
+                    synced_bot = await auto_sync_bot_with_recall(bot, db, current_user.id)
+                    synced_bots.append(synced_bot)
+                    sync_stats["successful"] += 1
+                except Exception as e:
+                    logging.warning(f"Failed to sync bot {bot.bot_id} with Recall: {e}")
+                    synced_bots.append(bot)  # Use original bot if sync fails
+                    sync_stats["failed"] += 1
+            
+            # Commit all sync changes at once
+            try:
+                db.commit()
+            except Exception as e:
+                logging.error(f"Failed to commit bot sync changes: {e}")
+                db.rollback()
+                synced_bots = bots  # Fall back to original bots
+        else:
+            synced_bots = bots
+        
+        # Prepare response data
+        bot_responses = []
+        for bot in synced_bots:
+            if include_meeting_details and bot.meeting_id:
+                # Get meeting details for this bot
+                meeting = db.query(Meeting).filter(Meeting.id == bot.meeting_id).first()
+                bot_detail = BotDetailResponse(
+                    id=bot.id,
+                    bot_id=bot.bot_id,
+                    user_id=bot.user_id,
+                    platform=bot.platform,
+                    bot_name=bot.bot_name,
+                    video_download_url=bot.video_download_url,
+                    transcript_url=bot.transcript_url,
+                    meeting_id=bot.meeting_id,
+                    recording_status=bot.recording_status,
+                    recording_data=bot.recording_data,
+                    video_recording_url=bot.video_recording_url,
+                    recording_expires_at=bot.recording_expires_at,
+                    created_at=bot.created_at,
+                    updated_at=bot.updated_at,
+                    # Meeting details
+                    meeting_title=meeting.title if meeting else None,
+                    meeting_url=meeting.meeting_url if meeting else None,
+                    meeting_platform=meeting.platform if meeting else None,
+                    meeting_scheduled_time=meeting.scheduled_time if meeting else None,
+                    meeting_status=meeting.status if meeting else None
+                )
+                bot_responses.append(bot_detail)
+            else:
+                # Use basic bot response
+                bot_responses.append(BotResponse.from_orm(bot))
+        
+        # Add order_by to filters_applied
+        if filters_applied is None:
+            filters_applied = {}
+        filters_applied['order_by'] = order_by
+        if include_meeting_details:
+            filters_applied['include_meeting_details'] = True
+        if auto_sync_recall:
+            filters_applied['auto_sync_recall'] = True
+            filters_applied['sync_stats'] = sync_stats
+        
+        return BotsListResponse(
+            success=True,
+            message=f"Retrieved {len(synced_bots)} bots (ordered by {order_by})" + 
+                   (" with meeting details" if include_meeting_details else "") +
+                   (f" - Synced {sync_stats['successful']}/{sync_stats['attempted']} bots" if auto_sync_recall else ""),
+            data=bot_responses,
+            total_count=total_count,
+            filtered_count=filtered_count if filters_applied else None,
+            filters_applied=filters_applied
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error retrieving user bots: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve bots: {str(e)}"
+        )
+
+
+@router.get("/bot/{bot_id}/details", response_model=BotDetailResponse)
+async def get_bot_details(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db),
+    auto_sync_recall: bool = True
+):
+    """Get detailed bot information including associated meeting details with auto-sync"""
+    try:
+        # Query bot with meeting details using a join
+        bot_query = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
+        
+        if not bot_query:
+            raise HTTPException(
+                status_code=404,
+                detail="Bot not found or you don't have permission to access it"
+            )
+        
+        # Auto-sync with Recall if requested
+        if auto_sync_recall:
+            try:
+                bot_query = await auto_sync_bot_with_recall(bot_query, db, current_user.id)
+                db.commit()
+            except Exception as e:
+                logging.warning(f"Auto-sync failed for bot {bot_id}: {e}")
+                db.rollback()
+        
+        # Get associated meeting details if meeting_id exists
+        meeting_details = None
+        if bot_query.meeting_id:
+            meeting_details = db.query(Meeting).filter(Meeting.id == bot_query.meeting_id).first()
+        
+        # Create response with bot details and meeting information
+        bot_detail = BotDetailResponse(
+            id=bot_query.id,
+            bot_id=bot_query.bot_id,
+            user_id=bot_query.user_id,
+            platform=bot_query.platform,
+            bot_name=bot_query.bot_name,
+            video_download_url=bot_query.video_download_url,
+            transcript_url=bot_query.transcript_url,
+            meeting_id=bot_query.meeting_id,
+            recording_status=bot_query.recording_status,
+            recording_data=bot_query.recording_data,
+            video_recording_url=bot_query.video_recording_url,
+            recording_expires_at=bot_query.recording_expires_at,
+            created_at=bot_query.created_at,
+            updated_at=bot_query.updated_at,
+            # Meeting details
+            meeting_title=meeting_details.title if meeting_details else None,
+            meeting_url=meeting_details.meeting_url if meeting_details else None,
+            meeting_platform=meeting_details.platform if meeting_details else None,
+            meeting_scheduled_time=meeting_details.scheduled_time if meeting_details else None,
+            meeting_status=meeting_details.status if meeting_details else None
+        )
+        
+        return bot_detail
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error retrieving bot details for {bot_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve bot details: {str(e)}"
+        )
 
 
 @router.get("/summary/test")
@@ -206,10 +510,58 @@ async def create_meeting_schedule(
 @router.get("/", response_model=List[MeetingResponse])
 async def get_my_meetings(
     current_user: User = Depends(get_current_user_bearer),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    from_date: Optional[str] = None,
+    to_date: Optional[str] = None,
+    order_by: str = "desc"
 ):
-    """Get all meetings for current user"""
-    return await get_user_meetings(db, current_user.id)
+    """Get all meetings for current user with optional date filtering and ordering
+    
+    Args:
+        from_date: Start date filter (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+        to_date: End date filter (ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
+        order_by: Sort order - 'desc' for newest first (default), 'asc' for oldest first
+    """
+    try:
+        # Parse date filters if provided
+        from_datetime = None
+        to_datetime = None
+        
+        if from_date:
+            try:
+                from_datetime = datetime.fromisoformat(from_date.replace('Z', '+00:00'))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Invalid from_date format. Use ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS"
+                )
+        
+        if to_date:
+            try:
+                to_datetime = datetime.fromisoformat(to_date.replace('Z', '+00:00'))
+            except ValueError:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Invalid to_date format. Use ISO format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS"
+                )
+        
+        # Validate order_by parameter
+        if order_by.lower() not in ["asc", "desc"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid order_by value. Use 'asc' for oldest first or 'desc' for newest first"
+            )
+        
+        return await get_user_meetings(db, current_user.id, from_datetime, to_datetime, order_by)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error retrieving user meetings: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve meetings: {str(e)}"
+        )
 
 
 @router.get("/{meeting_id}", response_model=MeetingResponse)
@@ -709,6 +1061,109 @@ async def stop_bot(
         }
 
 
+@router.get("/recall/bot/{bot_id}/metadata")
+async def get_bot_metadata_from_recall(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """Get comprehensive bot metadata from Recall API including meeting details"""
+    try:
+        # Verify the bot belongs to the current user
+        bot = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
+        
+        if not bot:
+            raise HTTPException(
+                status_code=404,
+                detail="Bot not found or you don't have permission to access it"
+            )
+        
+        # Get bot status and details from Recall
+        bot_status_result = await recall_service.get_bot_status(bot_id)
+        
+        # Get meeting metadata for this bot
+        meeting_metadata_result = await recall_service.list_meeting_metadata(bot_id=bot_id)
+        
+        # Get recordings metadata
+        recordings_result = await recall_service.list_recordings(bot_id=bot_id)
+        
+        return {
+            "success": True,
+            "bot_id": bot_id,
+            "bot_status": bot_status_result,
+            "meeting_metadata": meeting_metadata_result,
+            "recordings_metadata": recordings_result,
+            "database_bot_info": {
+                "id": bot.id,
+                "bot_name": bot.bot_name,
+                "platform": bot.platform,
+                "meeting_id": bot.meeting_id,
+                "recording_status": bot.recording_status,
+                "created_at": bot.created_at
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error retrieving bot metadata for {bot_id}: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": f"Failed to retrieve bot metadata: {str(e)}",
+            "bot_id": bot_id
+        }
+
+
+@router.get("/recall/bots/detailed")
+async def list_bots_with_details():
+    """List all bots from Recall API with detailed information including meeting metadata"""
+    try:
+        # Get all bots from Recall
+        bots_result = await recall_service.list_bots()
+        
+        # For each bot, try to get additional metadata
+        detailed_bots = []
+        for bot in bots_result:
+            bot_id = bot.get("id")
+            if bot_id:
+                try:
+                    # Get bot status
+                    status = await recall_service.get_bot_status(bot_id)
+                    
+                    # Get meeting metadata
+                    meeting_metadata = await recall_service.list_meeting_metadata(bot_id=bot_id)
+                    
+                    detailed_bot = {
+                        "bot_info": bot,
+                        "status": status,
+                        "meeting_metadata": meeting_metadata,
+                        "bot_id": bot_id
+                    }
+                    detailed_bots.append(detailed_bot)
+                except Exception as e:
+                    # If individual bot fails, still include basic info
+                    detailed_bots.append({
+                        "bot_info": bot,
+                        "error": f"Failed to get details: {str(e)}",
+                        "bot_id": bot_id
+                    })
+        
+        return {
+            "success": True,
+            "total_bots": len(bots_result),
+            "detailed_bots": detailed_bots
+        }
+    except Exception as e:
+        logging.error(f"Error listing detailed bots: {e}", exc_info=True)
+        return {
+            "success": False,
+            "error": f"Failed to list detailed bots: {str(e)}"
+        }
+
+
 @router.get("/recall/bots")
 async def list_bots():
     """List all bots"""
@@ -1134,4 +1589,171 @@ async def get_recording_url_simple(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get recording URL: {str(e)}"
+        )
+
+
+@router.post("/bot/{bot_id}/sync-with-recall")
+async def sync_bot_with_recall_metadata(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Sync bot with meeting data from Recall API metadata.
+    This will attempt to associate the bot with an existing meeting in the database
+    based on meeting URL, platform, and other matching criteria.
+    """
+    try:
+        # Verify the bot belongs to the current user
+        bot = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
+        
+        if not bot:
+            raise HTTPException(
+                status_code=404,
+                detail="Bot not found or you don't have permission to access it"
+            )
+        
+        # Get bot metadata from Recall API
+        bot_status_result = await recall_service.get_bot_status(bot_id)
+        
+        if not bot_status_result:
+            raise HTTPException(
+                status_code=404,
+                detail="Could not retrieve bot metadata from Recall API"
+            )
+        
+        # Extract meeting information from Recall metadata
+        meeting_url_data = bot_status_result.get("meeting_url", {})
+        recall_meeting_id = meeting_url_data.get("meeting_id")
+        platform = meeting_url_data.get("platform")
+        bot_name = bot_status_result.get("bot_name")
+        join_time = bot_status_result.get("join_at")
+        
+        # Try to find matching meeting in database
+        matching_meeting = None
+        update_info = {
+            "recall_metadata": {
+                "meeting_id": recall_meeting_id,
+                "platform": platform,
+                "join_time": join_time,
+                "bot_name": bot_name
+            }
+        }
+        
+        if recall_meeting_id:
+            # Method 1: Try to find by meeting URL containing the meeting ID
+            matching_meeting = db.query(Meeting).filter(
+                Meeting.user_id == current_user.id,
+                Meeting.meeting_url.contains(recall_meeting_id)
+            ).first()
+            
+            if matching_meeting:
+                update_info["match_method"] = "meeting_url_contains_id"
+        
+        if not matching_meeting and platform:
+            # Method 2: Try to find by platform and approximate time
+            from datetime import timedelta
+            
+            if join_time:
+                try:
+                    join_datetime = datetime.fromisoformat(join_time.replace('Z', '+00:00'))
+                    # Look for meetings scheduled within 1 hour of bot join time
+                    time_window = timedelta(hours=1)
+                    
+                    matching_meeting = db.query(Meeting).filter(
+                        Meeting.user_id == current_user.id,
+                        Meeting.platform == platform,
+                        Meeting.scheduled_time >= join_datetime - time_window,
+                        Meeting.scheduled_time <= join_datetime + time_window
+                    ).first()
+                    
+                    if matching_meeting:
+                        update_info["match_method"] = "platform_and_time_window"
+                except Exception as e:
+                    logging.warning(f"Could not parse join time: {e}")
+        
+        if not matching_meeting:
+            # Method 3: Try to find the most recent meeting with same platform
+            if platform:
+                matching_meeting = db.query(Meeting).filter(
+                    Meeting.user_id == current_user.id,
+                    Meeting.platform == platform
+                ).order_by(Meeting.scheduled_time.desc()).first()
+                
+                if matching_meeting:
+                    update_info["match_method"] = "latest_meeting_same_platform"
+        
+        # Update bot with found meeting or Recall metadata
+        changes_made = []
+        
+        if matching_meeting:
+            # Associate bot with found meeting
+            if bot.meeting_id != matching_meeting.id:
+                bot.meeting_id = matching_meeting.id
+                changes_made.append(f"Linked to meeting: {matching_meeting.title}")
+        
+        # Update bot with platform from Recall if not set
+        if platform and bot.platform != platform:
+            bot.platform = platform
+            changes_made.append(f"Updated platform: {platform}")
+        
+        # Update bot name if different
+        if bot_name and bot.bot_name != bot_name:
+            bot.bot_name = bot_name
+            changes_made.append(f"Updated bot name: {bot_name}")
+        
+        # Update bot's updated_at timestamp
+        bot.updated_at = datetime.utcnow()
+        
+        # Commit changes
+        db.commit()
+        db.refresh(bot)
+        
+        # Prepare response with meeting details if associated
+        response_data = {
+            "success": True,
+            "bot_id": bot_id,
+            "changes_made": changes_made,
+            "recall_metadata": update_info["recall_metadata"],
+            "match_info": {
+                "method": update_info.get("match_method"),
+                "meeting_found": matching_meeting is not None
+            },
+            "updated_bot": {
+                "id": bot.id,
+                "bot_id": bot.bot_id,
+                "bot_name": bot.bot_name,
+                "platform": bot.platform,
+                "meeting_id": bot.meeting_id,
+                "recording_status": bot.recording_status,
+                "created_at": bot.created_at,
+                "updated_at": bot.updated_at
+            }
+        }
+        
+        # Add meeting details if associated
+        if matching_meeting:
+            response_data["meeting_details"] = {
+                "id": matching_meeting.id,
+                "title": matching_meeting.title,
+                "meeting_url": matching_meeting.meeting_url,
+                "platform": matching_meeting.platform,
+                "scheduled_time": matching_meeting.scheduled_time,
+                "status": matching_meeting.status,
+                "description": matching_meeting.description
+            }
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Error syncing bot {bot_id} with Recall metadata: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to sync bot with Recall metadata: {str(e)}"
         )
