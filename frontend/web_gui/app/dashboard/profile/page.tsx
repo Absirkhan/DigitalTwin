@@ -23,6 +23,7 @@ export default function ProfilePage() {
       setEditForm({
         full_name: data.full_name,
         email: data.email,
+        bot_name: data.bot_name,
       });
     } catch (error) {
       console.error('Failed to load profile:', error);
@@ -134,6 +135,21 @@ export default function ProfilePage() {
                 />
               </div>
 
+              <div>
+                <label htmlFor="bot_name" className="block text-sm font-medium text-gray-700">
+                  Bot Name
+                </label>
+                <input
+                  type="text"
+                  id="bot_name"
+                  value={editForm.bot_name || ''}
+                  onChange={(e) => setEditForm({ ...editForm, bot_name: e.target.value })}
+                  placeholder="My AI Assistant"
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                />
+                <p className="mt-1 text-xs text-gray-500">Default name for your bot in meetings</p>
+              </div>
+
               <div className="flex justify-end space-x-3">
                 <button
                   type="button"
@@ -142,6 +158,7 @@ export default function ProfilePage() {
                     setEditForm({
                       full_name: user.full_name,
                       email: user.email,
+                      bot_name: user.bot_name,
                     });
                   }}
                   className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
@@ -172,6 +189,12 @@ export default function ProfilePage() {
                 <dt className="text-sm font-medium text-gray-500">Email address</dt>
                 <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
                   {user.email}
+                </dd>
+              </div>
+              <div className="py-4 sm:py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                <dt className="text-sm font-medium text-gray-500">Bot name</dt>
+                <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                  {user.bot_name || 'Not set'}
                 </dd>
               </div>
               {user.google_id && (

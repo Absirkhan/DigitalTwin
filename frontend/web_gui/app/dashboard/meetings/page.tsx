@@ -8,7 +8,7 @@ import type { Meeting, MeetingCreate, JoinMeetingRequest } from '@/lib/api/types
 
 export default function MeetingsPage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
@@ -35,7 +35,10 @@ export default function MeetingsPage() {
   const { isRunning, lastSync, forceSync } = useAutoSync({
     onMeetingsUpdate: (updatedMeetings) => {
       setMeetings(updatedMeetings);
-      setIsLoading(false);
+      // Only turn off loading after initial data fetch
+      if (isInitialLoad) {
+        setIsInitialLoad(false);
+      }
     },
     onSyncSuccess: (eventsSynced) => {
       if (eventsSynced > 0) {
@@ -47,26 +50,14 @@ export default function MeetingsPage() {
     onError: (error) => {
       console.error('Auto-sync error:', error);
       // Don't show error alerts for background sync, just log
+      // Still disable loading on error
+      if (isInitialLoad) {
+        setIsInitialLoad(false);
+      }
     },
     enabled: true,
     syncInterval: 1000 // 1 second
   });
-
-  useEffect(() => {
-    loadMeetings();
-  }, []);
-
-  const loadMeetings = async () => {
-    setIsLoading(true);
-    try {
-      const data = await meetingService.getAll();
-      setMeetings(data);
-    } catch (error) {
-      console.error('Failed to load meetings:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
 
   const handleCreateMeeting = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,16 +65,17 @@ export default function MeetingsPage() {
     try {
       await meetingService.create(newMeeting);
       setShowCreateModal(false);
-      setNewMeeting({ 
-        title: '', 
-        description: '', 
+      setNewMeeting({
+        title: '',
+        description: '',
         meeting_url: '',
         platform: 'google_meet',
         scheduled_time: new Date().toISOString(),
         duration_minutes: 60,
         auto_join: false,
       });
-      await loadMeetings();
+      // Auto-sync will pick up the new meeting automatically
+      forceSync();
     } catch (error) {
       alert('Failed to create meeting: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
@@ -105,7 +97,8 @@ export default function MeetingsPage() {
         enable_realtime_processing: false,
         enable_video_recording: true,
       });
-      await loadMeetings();
+      // Auto-sync will pick up the changes automatically
+      forceSync();
     } catch (error) {
       alert('Failed to join meeting: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
@@ -117,13 +110,14 @@ export default function MeetingsPage() {
     if (!confirm('Are you sure you want to delete this meeting?')) return;
     try {
       await meetingService.delete(id);
-      await loadMeetings();
+      // Auto-sync will pick up the changes automatically
+      forceSync();
     } catch (error) {
       alert('Failed to delete meeting: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
-  if (isLoading) {
+  if (isInitialLoad) {
     return (
       <div className="flex items-center justify-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>

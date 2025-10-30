@@ -10,6 +10,7 @@ export interface User {
   id: number;
   email: string;
   full_name: string;
+  bot_name?: string;
   google_id?: string;
   profile_picture?: string;
   is_active: boolean;
@@ -20,6 +21,7 @@ export interface User {
 export interface UserUpdate {
   full_name?: string;
   email?: string;
+  bot_name?: string;
 }
 
 // ============================================================================

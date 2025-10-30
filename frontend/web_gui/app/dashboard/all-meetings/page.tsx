@@ -162,7 +162,7 @@ function ResultModal({ isOpen, onClose, title, content, type }: ResultModalProps
 
 export default function AllMeetingsPage({}: AllMeetingsPageProps) {
   const [bots, setBots] = useState<Bot[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
@@ -171,8 +171,8 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
   // Auto-sync hook for calendar (will trigger bot data refresh)
   const { isRunning, forceSync } = useAutoSync({
     onMeetingsUpdate: () => {
-      // When meetings are updated, refresh bots data
-      loadBots();
+      // When meetings are updated, refresh bots data without showing loading spinner
+      loadBots(false);
     },
     onSyncSuccess: (eventsSynced) => {
       if (eventsSynced > 0) {
@@ -214,11 +214,14 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
   };
 
   // Load bots data
-  const loadBots = async () => {
+  const loadBots = async (showLoading: boolean = true) => {
     try {
-      setLoading(true);
+      // Only show loading spinner on initial load or manual refresh
+      if (showLoading) {
+        setIsInitialLoad(true);
+      }
       setError(null);
-      
+
       const response = await meetingService.getBots({
         order_by: sortOrder,
         include_meeting_details: true,
@@ -229,12 +232,14 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load meetings');
     } finally {
-      setLoading(false);
+      if (isInitialLoad) {
+        setIsInitialLoad(false);
+      }
     }
   };
 
   useEffect(() => {
-    loadBots();
+    loadBots(true);
   }, [sortOrder]);
 
   // Action handlers
@@ -309,7 +314,7 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
     return new Date(dateString).toLocaleString();
   };
 
-  if (loading) {
+  if (isInitialLoad) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
@@ -324,7 +329,7 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
           <h2 className="text-xl font-semibold mb-2">Error</h2>
           <p>{error}</p>
           <button
-            onClick={loadBots}
+            onClick={() => { loadBots(true); }}
             className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
           >
             Retry
@@ -378,7 +383,7 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
             <option value="asc">Oldest First</option>
           </select>
           <button
-            onClick={loadBots}
+            onClick={() => { loadBots(true); }}
             className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
           >
             Refresh
