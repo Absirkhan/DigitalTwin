@@ -87,14 +87,14 @@ export function useAutoSync({
       syncCalendarAndUpdateMeetings();
     }, syncInterval);
     
-    console.log(`🔄 Auto-sync started (interval: ${syncInterval}ms)`);
+    //console.log(`🔄 Auto-sync started (interval: ${syncInterval}ms)`);
   }, [syncCalendarAndUpdateMeetings, syncInterval]);
 
   const stopAutoSync = useCallback(() => {
     if (intervalRef.current) {
       clearInterval(intervalRef.current);
       intervalRef.current = null;
-      console.log('⏹️ Auto-sync stopped');
+      //console.log('⏹️ Auto-sync stopped');
     }
   }, []);
 

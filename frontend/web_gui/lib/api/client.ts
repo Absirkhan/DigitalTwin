@@ -52,10 +52,15 @@ export async function apiRequest<T>(
     const token = getAuthToken();
     if (token) {
       requestHeaders['Authorization'] = `Bearer ${token}`;
+      console.log('API Request: Token present, length:', token.length);
+    } else {
+      console.warn('API Request: No auth token found but auth required!');
     }
   }
 
   try {
+    console.log('API Request:', { url, method: fetchOptions.method, hasAuth: !!requestHeaders['Authorization'] });
+    
     const response = await fetch(url, {
       ...fetchOptions,
       headers: requestHeaders,
@@ -63,10 +68,40 @@ export async function apiRequest<T>(
 
     // Handle non-OK responses
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(
-        errorData.detail || `HTTP ${response.status}: ${response.statusText}`
-      );
+      // Try to get response text first to see what the server actually returned
+      const responseText = await response.text();
+      let errorData: any = {};
+      
+      try {
+        errorData = JSON.parse(responseText);
+      } catch {
+        // Only log non-JSON responses if it's not a 401 (expected for unauthenticated users)
+        if (response.status !== 401) {
+          console.error('Response is not JSON:', responseText);
+        }
+      }
+      
+      const errorMessage = errorData.detail || `HTTP ${response.status}: ${response.statusText}`;
+      
+      // For 401 errors or credential validation failures, throw a special error that won't be logged
+      if (response.status === 401 || errorMessage.includes('Could not validate credentials')) {
+        const authError = new Error(errorMessage);
+        (authError as any).isAuthError = true; // Mark as expected auth error
+        throw authError;
+      }
+      
+      // Only log detailed errors for unexpected failures
+      console.error('API Error Details:', {
+        url,
+        method: fetchOptions.method,
+        status: response.status,
+        statusText: response.statusText,
+        errorData,
+        responseText: responseText.substring(0, 200), // First 200 chars
+        requestHeaders: { ...requestHeaders, Authorization: requestHeaders['Authorization'] ? 'Bearer ***' : 'none' },
+        headers: Object.fromEntries(response.headers.entries())
+      });
+      throw new Error(errorMessage);
     }
 
     // Handle 204 No Content
