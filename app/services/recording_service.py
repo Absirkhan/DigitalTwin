@@ -44,6 +44,15 @@ class RecordingService:
                 api_status = latest_recording.status.get("code", "unknown")
                 if api_status == "done":
                     bot.recording_status = "completed"
+                    
+                    # Also update associated meeting status to completed
+                    if bot.meeting_id:
+                        from app.models.meeting import Meeting
+                        meeting = db.query(Meeting).filter(Meeting.id == bot.meeting_id).first()
+                        if meeting and meeting.status != "completed":
+                            meeting.status = "completed"
+                            print(f"Auto-updated meeting {meeting.id} status to completed")
+                            
                 elif api_status == "in_progress":
                     bot.recording_status = "recording"
                 elif api_status == "failed":

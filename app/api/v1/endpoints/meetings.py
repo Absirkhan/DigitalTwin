@@ -7,6 +7,8 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
 import logging
+import json
+from pathlib import Path
 
 from app.core.database import get_db
 from app.schemas.meeting import (
@@ -51,8 +53,125 @@ from app.models.user import User
 from app.models.bot import Bot
 from app.models.meeting import Meeting
 from app.core.config import settings
+import threading
 
 router = APIRouter()
+
+# Helper function to log bot_id filtering issues to JSON
+def log_bot_filtering_to_json(endpoint: str, requested_bot_id: str, data: dict):
+    """Log bot_id filtering debug info to JSON file"""
+    try:
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        log_file = log_dir / "bot_filtering_debug.json"
+        
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "endpoint": endpoint,
+            "requested_bot_id": requested_bot_id,
+            **data
+        }
+        
+        # Append to file
+        existing_logs = []
+        if log_file.exists():
+            try:
+                with open(log_file, 'r') as f:
+                    existing_logs = json.load(f)
+            except:
+                existing_logs = []
+        
+        existing_logs.append(log_entry)
+        
+        # Keep only last 50 entries
+        if len(existing_logs) > 50:
+            existing_logs = existing_logs[-50:]
+        
+        with open(log_file, 'w') as f:
+            json.dump(existing_logs, f, indent=2)
+    except Exception as e:
+        logging.error(f"Failed to write to JSON log: {e}")
+
+
+def schedule_meeting_completion_check(bot_id: str, end_time: datetime):
+    """
+    Schedule a call to check and complete meeting status at the specified end time.
+    Uses threading.Timer to schedule the check.
+    """
+    try:
+        current_time = datetime.utcnow()
+        time_until_end = (end_time - current_time).total_seconds()
+        
+        # Only schedule if end time is in the future
+        if time_until_end > 0:
+            def check_completion():
+                try:
+                    from app.core.database import SessionLocal
+                    db = SessionLocal()
+                    
+                    try:
+                        logging.info(f"🕐 Scheduled check executing for bot {bot_id} at {datetime.utcnow()}")
+                        
+                        # Find the bot
+                        bot = db.query(Bot).filter(Bot.bot_id == bot_id).first()
+                        if not bot:
+                            logging.warning(f"Bot {bot_id} not found during scheduled check")
+                            return
+                        
+                        # Find the meeting
+                        meeting = None
+                        if bot.meeting_id:
+                            meeting = db.query(Meeting).filter(Meeting.id == bot.meeting_id).first()
+                        
+                        if not meeting:
+                            logging.warning(f"No meeting found for bot {bot_id} during scheduled check")
+                            return
+                        
+                        # Check if meeting has ended
+                        current_time = datetime.utcnow()
+                        if meeting.end_time and current_time > meeting.end_time:
+                            if meeting.status != "completed":
+                                old_status = meeting.status
+                                meeting.status = "completed"
+                                meeting.updated_at = datetime.utcnow()
+                                db.commit()
+                                logging.info(f"✅ Meeting {meeting.id} ('{meeting.title}') auto-completed: {old_status} → completed")
+                            else:
+                                logging.info(f"Meeting {meeting.id} already completed")
+                        else:
+                            logging.info(f"Meeting {meeting.id} end time not yet reached")
+                            
+                    finally:
+                        db.close()
+                        
+                except Exception as e:
+                    logging.error(f"❌ Error in scheduled completion check for bot {bot_id}: {e}", exc_info=True)
+            
+            # Schedule the check
+            timer = threading.Timer(time_until_end, check_completion)
+            timer.daemon = True  # Make thread daemon so it doesn't prevent shutdown
+            timer.start()
+            
+            logging.info(f"⏰ Scheduled meeting completion check for bot {bot_id} at {end_time} (in {time_until_end/60:.1f} minutes)")
+        else:
+            logging.info(f"⚠️ Meeting end time {end_time} has already passed for bot {bot_id}, checking immediately")
+            # If end time has already passed, check immediately
+            from app.core.database import SessionLocal
+            db = SessionLocal()
+            try:
+                bot = db.query(Bot).filter(Bot.bot_id == bot_id).first()
+                if bot and bot.meeting_id:
+                    meeting = db.query(Meeting).filter(Meeting.id == bot.meeting_id).first()
+                    if meeting and meeting.status != "completed":
+                        meeting.status = "completed"
+                        meeting.updated_at = datetime.utcnow()
+                        db.commit()
+                        logging.info(f"✅ Meeting {meeting.id} immediately marked as completed")
+            finally:
+                db.close()
+            
+    except Exception as e:
+        logging.error(f"❌ Error scheduling completion check for bot {bot_id}: {e}", exc_info=True)
 
 
 async def auto_sync_bot_with_recall(bot: Bot, db: Session, user_id: int) -> Bot:
@@ -639,6 +758,36 @@ async def join_meeting_with_url(
                 # If video recording was enabled, note it in the response
                 if request.enable_video_recording:
                     response_data.message += " (Video recording enabled)"
+                
+                # Try to find and schedule meeting completion check
+                try:
+                    # Try to find meeting associated with this meeting URL
+                    if request.meeting_url:
+                        logging.info(f"🔍 Looking for meeting with URL: {request.meeting_url}")
+                        meeting = db.query(Meeting).filter(
+                            Meeting.user_id == current_user.id,
+                            Meeting.meeting_url == request.meeting_url
+                        ).first()
+                        
+                        if meeting:
+                            logging.info(f"📅 Found meeting: ID={meeting.id}, Title='{meeting.title}', Status={meeting.status}, EndTime={meeting.end_time}")
+                            if meeting.end_time:
+                                # Link bot to meeting
+                                new_bot.meeting_id = meeting.id
+                                db.commit()
+                                logging.info(f"🔗 Linked bot {response_data.bot_id} to meeting {meeting.id}")
+                                
+                                # Schedule automatic completion check
+                                schedule_meeting_completion_check(response_data.bot_id, meeting.end_time)
+                            else:
+                                logging.warning(f"⚠️ Meeting {meeting.id} has no end_time set")
+                        else:
+                            logging.warning(f"⚠️ No meeting found with URL: {request.meeting_url}")
+                    else:
+                        logging.warning(f"⚠️ No meeting_url provided in request")
+                except Exception as schedule_error:
+                    # Don't fail the join if scheduling fails
+                    logging.error(f"❌ Failed to schedule completion check for bot {response_data.bot_id}: {schedule_error}", exc_info=True)
 
         return response_data
 
@@ -1295,6 +1444,7 @@ async def get_formatted_transcript(
             )
         
         # First, get the list of transcripts for this bot
+        logging.info(f"🔍 Fetching transcripts for bot_id: {bot_id}")
         transcripts_result = await recall_service.list_transcripts(bot_id=bot_id)
 
         if not transcripts_result.get("success"):
@@ -1303,16 +1453,63 @@ async def get_formatted_transcript(
                 detail=f"Failed to retrieve transcripts: {transcripts_result.get('error', 'Unknown error')}",
             )
 
-        transcripts = transcripts_result.get("transcripts", [])
+        all_transcripts = transcripts_result.get("transcripts", [])
+        logging.info(f"📊 Recall API returned {len(all_transcripts)} transcripts")
+        
+        # Prepare data for JSON logging
+        transcript_list = []
+        
+        # Filter transcripts to ensure they match the bot_id
+        # The Recall API returns null bot_ids, so extract from download URL
+        transcripts = []
+        import re
+        for transcript in all_transcripts:
+            transcript_bot_id = transcript.get("bot_id")
+            
+            # Extract bot_id from download URL if not in transcript object
+            transcript_data = transcript.get("data", {})
+            download_url = transcript_data.get("download_url", "")
+            
+            if not transcript_bot_id and download_url:
+                # URL format: https://api.recall.ai/api/v1/bot/{bot_id}/transcript/{transcript_id}/
+                bot_id_match = re.search(r'/bot/([^/]+)/', download_url)
+                if bot_id_match:
+                    transcript_bot_id = bot_id_match.group(1)
+            
+            transcript_info = {
+                "transcript_id": transcript.get('id'),
+                "bot_id": transcript_bot_id,
+                "download_url": download_url[:80] + "..." if len(download_url) > 80 else download_url,
+                "matches": transcript_bot_id == bot_id
+            }
+            transcript_list.append(transcript_info)
+            logging.info(f"  Transcript: id={transcript.get('id')}, bot_id={transcript_bot_id}, matches={transcript_bot_id == bot_id}")
+            if transcript_bot_id == bot_id:
+                transcripts.append(transcript)
+        
+        # Log to JSON file
+        log_bot_filtering_to_json(
+            endpoint="/bot/{bot_id}/transcript/formatted",
+            requested_bot_id=bot_id,
+            data={
+                "total_transcripts_returned": len(all_transcripts),
+                "transcripts": transcript_list,
+                "matching_transcripts_count": len(transcripts),
+                "selected_transcript_id": transcripts[0].get('id') if transcripts else None
+            }
+        )
+        
+        logging.info(f"✅ Found {len(transcripts)} transcripts matching bot_id {bot_id}")
         
         if not transcripts:
             raise HTTPException(
                 status_code=404,
-                detail="No transcripts found for this bot. The meeting may still be in progress or no transcript was generated.",
+                detail=f"No transcripts found for bot {bot_id}. The meeting may still be in progress or no transcript was generated.",
             )
 
-        # Get the most recent transcript
+        # Get the most recent transcript for this specific bot
         latest_transcript = transcripts[0]
+        logging.info(f"📄 Using transcript id={latest_transcript.get('id')} for bot_id={bot_id}")
         
         # The download URL is nested inside the 'data' object
         transcript_data = latest_transcript.get("data", {})
@@ -1756,4 +1953,248 @@ async def sync_bot_with_recall_metadata(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to sync bot with Recall metadata: {str(e)}"
+        )
+
+
+@router.post("/bot/{bot_id}/refresh-status")
+async def refresh_bot_and_meeting_status(
+    bot_id: str,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Refresh bot recording status from Recall API and update associated meeting status.
+    This endpoint fetches the latest recording status and automatically updates
+    the meeting status to 'completed' if the recording is done.
+    """
+    try:
+        # Verify the bot belongs to the current user
+        bot = db.query(Bot).filter(
+            Bot.bot_id == bot_id,
+            Bot.user_id == current_user.id
+        ).first()
+        
+        if not bot:
+            raise HTTPException(
+                status_code=404,
+                detail="Bot not found or you don't have permission to access it"
+            )
+        
+        # Update bot recording status (this will also update meeting status)
+        from app.services.recording_service import RecordingService
+        recording_service = RecordingService()
+        updated_bot = await recording_service.update_bot_recording_status(bot_id, db)
+        
+        if not updated_bot:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to refresh bot status"
+            )
+        
+        # Get updated meeting info
+        meeting_info = None
+        if updated_bot.meeting_id:
+            meeting = db.query(Meeting).filter(Meeting.id == updated_bot.meeting_id).first()
+            if meeting:
+                meeting_info = {
+                    "id": meeting.id,
+                    "title": meeting.title,
+                    "status": meeting.status,
+                    "updated": True
+                }
+        
+        return {
+            "success": True,
+            "bot_id": bot_id,
+            "recording_status": updated_bot.recording_status,
+            "meeting": meeting_info,
+            "message": "Bot and meeting status refreshed successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error refreshing bot {bot_id} status: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to refresh status: {str(e)}"
+        )
+
+
+@router.post("/bot/{bot_id}/check-and-complete")
+async def check_and_complete_meeting(
+    bot_id: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Check if a bot's associated meeting has ended and update status to completed if it has.
+    
+    Process:
+    1. Find the bot by bot_id
+    2. Get the associated user from the bot
+    3. Find the meeting associated with this bot
+    4. Check if meeting's end time has passed
+    5. If yes, update meeting status to 'completed'
+    
+    Returns:
+        dict: Status of the check and any updates made
+    """
+    try:
+        # Step 1: Find the bot
+        bot = db.query(Bot).filter(Bot.bot_id == bot_id).first()
+        if not bot:
+            raise HTTPException(status_code=404, detail=f"Bot with ID {bot_id} not found")
+        
+        # Step 2: Get the associated user
+        if not bot.user_id:
+            raise HTTPException(status_code=400, detail="Bot has no associated user")
+        
+        user = db.query(User).filter(User.id == bot.user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="Associated user not found")
+        
+        # Step 3: Find the meeting associated with this bot
+        meeting = None
+        if bot.meeting_id:
+            meeting = db.query(Meeting).filter(
+                Meeting.id == bot.meeting_id,
+                Meeting.user_id == user.id
+            ).first()
+        
+        if not meeting:
+            # Try to find by matching bot_id in the database
+            meeting = db.query(Meeting).filter(
+                Meeting.user_id == user.id
+            ).join(Bot).filter(Bot.bot_id == bot_id).first()
+        
+        if not meeting:
+            return {
+                "success": False,
+                "bot_id": bot_id,
+                "user_id": user.id,
+                "user_email": user.email,
+                "message": "No meeting found associated with this bot"
+            }
+        
+        # Step 4: Check if meeting's end time has passed
+        current_time = datetime.utcnow()
+        meeting_ended = False
+        status_updated = False
+        
+        # Check if meeting has an end time
+        if meeting.end_time:
+            # If end time has passed, mark as completed
+            if current_time > meeting.end_time:
+                meeting_ended = True
+                if meeting.status != "completed":
+                    meeting.status = "completed"
+                    db.commit()
+                    db.refresh(meeting)
+                    status_updated = True
+                    logging.info(f"Meeting {meeting.id} auto-completed - end time passed")
+        
+        # If no end time but has scheduled time + duration, calculate it
+        elif meeting.scheduled_time and hasattr(meeting, 'duration') and meeting.duration:
+            from datetime import timedelta
+            calculated_end_time = meeting.scheduled_time + timedelta(minutes=meeting.duration)
+            if current_time > calculated_end_time:
+                meeting_ended = True
+                if meeting.status != "completed":
+                    meeting.status = "completed"
+                    db.commit()
+                    db.refresh(meeting)
+                    status_updated = True
+                    logging.info(f"Meeting {meeting.id} auto-completed - calculated end time passed")
+        
+        return {
+            "success": True,
+            "bot_id": bot_id,
+            "user_id": user.id,
+            "user_email": user.email,
+            "meeting_id": meeting.id,
+            "meeting_title": meeting.title,
+            "meeting_status": meeting.status,
+            "meeting_ended": meeting_ended,
+            "status_updated": status_updated,
+            "current_time": current_time.isoformat(),
+            "meeting_end_time": meeting.end_time.isoformat() if meeting.end_time else None,
+            "message": "Status updated to completed" if status_updated else "Meeting status checked successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error checking meeting completion for bot {bot_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to check meeting completion: {str(e)}"
+        )
+
+
+@router.post("/check-all-meetings-completion")
+async def check_all_meetings_completion(
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Check all user's in-progress meetings and mark as completed if end time has passed.
+    This is a manual trigger for checking meeting statuses.
+    
+    Returns:
+        dict: Summary of meetings checked and updated
+    """
+    try:
+        current_time = datetime.utcnow()
+        
+        # Find all in-progress meetings for the user
+        in_progress_meetings = db.query(Meeting).filter(
+            Meeting.user_id == current_user.id,
+            Meeting.status == "in_progress"
+        ).all()
+        
+        checked_count = len(in_progress_meetings)
+        updated_count = 0
+        updated_meetings = []
+        
+        for meeting in in_progress_meetings:
+            should_complete = False
+            
+            # Check if meeting has an end time
+            if meeting.end_time and current_time > meeting.end_time:
+                should_complete = True
+            # If no end time but has scheduled time + duration, calculate it
+            elif meeting.scheduled_time and meeting.duration_minutes:
+                from datetime import timedelta
+                calculated_end_time = meeting.scheduled_time + timedelta(minutes=meeting.duration_minutes)
+                if current_time > calculated_end_time:
+                    should_complete = True
+            
+            if should_complete:
+                meeting.status = "completed"
+                meeting.updated_at = datetime.utcnow()
+                updated_count += 1
+                updated_meetings.append({
+                    "id": meeting.id,
+                    "title": meeting.title,
+                    "end_time": meeting.end_time.isoformat() if meeting.end_time else None
+                })
+                logging.info(f"✅ Manually completed meeting {meeting.id} ('{meeting.title}')")
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "checked_count": checked_count,
+            "updated_count": updated_count,
+            "updated_meetings": updated_meetings,
+            "current_time": current_time.isoformat(),
+            "message": f"Checked {checked_count} in-progress meetings, updated {updated_count} to completed"
+        }
+        
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Error checking all meetings completion: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to check meetings completion: {str(e)}"
         )

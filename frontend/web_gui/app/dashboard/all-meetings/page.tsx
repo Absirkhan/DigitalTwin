@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { meetingService, summarizationService } from '@/lib/api';
 import { useAutoSync } from '@/hooks/useAutoSync';
 import type { Bot, BotsListResponse, BotTranscriptResponse, SummarizationResponse } from '@/lib/api/types';
+import { FormattedSummaryDisplay } from '@/app/components/FormattedSummaryDisplay';
 
 interface AllMeetingsPageProps {}
 
@@ -25,18 +26,49 @@ function ResultModal({ isOpen, onClose, title, content, type }: ResultModalProps
         return (
           <div className="space-y-4">
             <div>
-              <h4 className="font-medium text-gray-900 mb-2">Raw Transcript:</h4>
-              <div className="bg-gray-50 p-4 rounded-md max-h-96 overflow-y-auto">
-                <pre className="whitespace-pre-wrap text-sm text-gray-700">
-                  {content.clean_continuous_text || content.formatted_transcript?.clean_continuous_text || 'No transcript available'}
-                </pre>
+              <h4 className="font-semibold mb-4" style={{ 
+                fontSize: '16px',
+                color: 'var(--text-primary)' 
+              }}>Transcript:</h4>
+              <div className="rounded-lg border" style={{
+                background: 'var(--bg-tertiary)',
+                borderColor: 'var(--border-primary)',
+                padding: '20px',
+                maxHeight: '500px',
+                overflowY: 'auto'
+              }}>
+                <div style={{ lineHeight: '1.6' }}>
+                  {(content.clean_continuous_text || content.formatted_transcript?.clean_continuous_text || 'No transcript available')
+                    .split('\n')
+                    .map((line: string, index: number) => {
+                      // Match speaker names (name followed by colon)
+                      const speakerMatch = line.match(/^([^:]+):\s*(.*)$/);
+                      if (speakerMatch) {
+                        return (
+                          <div key={index} style={{ marginBottom: '16px' }}>
+                            <span style={{ 
+                              fontWeight: 600, 
+                              color: '#E07856',
+                              marginRight: '8px'
+                            }}>
+                              {speakerMatch[1]}:
+                            </span>
+                            <span style={{ color: 'var(--text-primary)' }}>
+                              {speakerMatch[2]}
+                            </span>
+                          </div>
+                        );
+                      }
+                      return line ? <div key={index} style={{ marginBottom: '12px', color: 'var(--text-primary)' }}>{line}</div> : null;
+                    })}
+                </div>
               </div>
             </div>
             {content.statistics && (
               <div>
-                <h4 className="font-medium text-gray-900 mb-2">Statistics:</h4>
-                <div className="bg-blue-50 p-3 rounded-md">
-                  <pre className="text-sm text-blue-800">
+                <h4 className="font-semibold text-foreground mb-2">Statistics:</h4>
+                <div className="bg-gradient-primary/5 p-3 rounded-lg border border-primary/20">
+                  <pre className="text-sm text-muted-foreground">
                     {JSON.stringify(content.statistics, null, 2)}
                   </pre>
                 </div>
@@ -49,36 +81,35 @@ function ResultModal({ isOpen, onClose, title, content, type }: ResultModalProps
         return (
           <div className="space-y-4">
             {content.success === false && content.error && (
-              <div className="bg-red-50 p-4 rounded-md">
-                <p className="text-red-800 font-medium">Error:</p>
-                <p className="text-red-700">{content.error}</p>
+              <div className="bg-muted/50 border border-border p-4 rounded-xl">
+                <p className="text-foreground font-medium">Error:</p>
+                <p className="text-muted-foreground">{content.error}</p>
               </div>
             )}
             
             {content.success && content.summary && (
               <div>
-                <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-lg p-6 border border-purple-200">
-                  <p className="text-gray-700 whitespace-pre-wrap leading-relaxed">{content.summary}</p>
+                <div className="rounded-lg p-6 border" style={{
+                  background: 'var(--bg-tertiary)',
+                  borderColor: 'var(--border-primary)'
+                }}>
+                  <FormattedSummaryDisplay summaryText={content.summary} />
                   {content.metrics && (
-                    <div className="mt-6 pt-4 border-t border-purple-200 flex flex-wrap items-center gap-4 text-sm text-gray-600">
-                      <div className="flex items-center">
-                        <span className="font-medium">Original:</span>
-                        <span className="ml-1">{content.metrics.original_words || 0} words</span>
+                    <div className="mt-6 pt-4 flex flex-wrap items-center gap-4 text-sm" style={{
+                      borderTop: '1px solid var(--border-primary)'
+                    }}>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium" style={{ color: 'var(--text-primary)' }}>Original:</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{content.metrics.original_words || 0} words</span>
                       </div>
-                      <div className="flex items-center">
-                        <span className="font-medium">Summary:</span>
-                        <span className="ml-1">{content.metrics.summary_words || 0} words</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium" style={{ color: 'var(--text-primary)' }}>Summary:</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{content.metrics.summary_words || 0} words</span>
                       </div>
-                      <div className="flex items-center">
-                        <span className="font-medium">Compression:</span>
-                        <span className="ml-1">{((content.metrics.compression_ratio || 0) * 100).toFixed(1)}%</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium" style={{ color: 'var(--text-primary)' }}>Compression:</span>
+                        <span style={{ color: 'var(--text-secondary)' }}>{((content.metrics.compression_ratio || 0) * 100).toFixed(1)}%</span>
                       </div>
-                      {content.metrics.model_used && (
-                        <div className="flex items-center">
-                          <span className="font-medium">Model:</span>
-                          <span className="ml-1">{content.metrics.model_used}</span>
-                        </div>
-                      )}
                     </div>
                   )}
                 </div>
@@ -87,25 +118,25 @@ function ResultModal({ isOpen, onClose, title, content, type }: ResultModalProps
             
             {content.action_items && (
               <div>
-                <h4 className="font-medium text-gray-900 mb-2">Action Items:</h4>
-                <div className="bg-yellow-50 p-4 rounded-md">
-                  <p className="text-gray-700 whitespace-pre-wrap">{content.action_items}</p>
+                <h4 className="font-semibold text-foreground mb-2">Action Items:</h4>
+                <div className="bg-secondary/5 p-4 rounded-lg border border-secondary/20">
+                  <p className="text-foreground whitespace-pre-wrap">{content.action_items}</p>
                 </div>
               </div>
             )}
             
             {content.key_decisions && (
               <div>
-                <h4 className="font-medium text-gray-900 mb-2">Key Decisions:</h4>
-                <div className="bg-purple-50 p-4 rounded-md">
-                  <p className="text-gray-700 whitespace-pre-wrap">{content.key_decisions}</p>
+                <h4 className="font-semibold text-foreground mb-2">Key Decisions:</h4>
+                <div className="bg-gradient-secondary/5 p-4 rounded-lg border border-secondary/20">
+                  <p className="text-foreground whitespace-pre-wrap">{content.key_decisions}</p>
                 </div>
               </div>
             )}
             
             {!content.summary && !content.action_items && !content.key_decisions && !content.error && (
-              <div className="bg-gray-50 p-4 rounded-md">
-                <p className="text-gray-600">No summary content available.</p>
+              <div className="bg-muted/30 p-4 rounded-lg border border-border">
+                <p className="text-muted-foreground">No summary content available.</p>
               </div>
             )}
           </div>
@@ -115,17 +146,20 @@ function ResultModal({ isOpen, onClose, title, content, type }: ResultModalProps
         return (
           <div className="space-y-4">
             <div>
-              <h4 className="font-medium text-gray-900 mb-2">Recording Download:</h4>
-              <div className="bg-purple-50 p-4 rounded-md">
+              <h4 className="font-semibold text-foreground mb-2">Recording Download:</h4>
+              <div className="bg-gradient-secondary/5 p-4 rounded-lg border border-secondary/20">
                 <a 
                   href={content.download_url} 
                   target="_blank" 
                   rel="noopener noreferrer"
-                  className="inline-flex items-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700"
+                  className="btn btn-primary inline-flex items-center gap-2 px-4 py-2"
                 >
-                  📹 Download Recording
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  Download Recording
                 </a>
-                <p className="text-sm text-gray-600 mt-2">
+                <p className="text-sm text-muted-foreground mt-3">
                   Bot ID: {content.bot_id}
                 </p>
               </div>
@@ -139,20 +173,64 @@ function ResultModal({ isOpen, onClose, title, content, type }: ResultModalProps
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden">
-        <div className="flex justify-between items-center p-6 border-b">
-          <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+    <div className="fixed inset-0 flex items-center justify-center z-50 p-4" style={{
+      background: 'rgba(0, 0, 0, 0.5)',
+      backdropFilter: 'blur(4px)'
+    }}>
+      <div className="w-full flex flex-col" style={{
+        maxWidth: '900px',
+        maxHeight: '90vh',
+        background: 'var(--bg-secondary)',
+        border: '1px solid var(--border-primary)',
+        borderRadius: '12px',
+        overflow: 'hidden'
+      }}>
+        <div className="flex justify-between items-center" style={{
+          padding: '24px 32px',
+          borderBottom: '1px solid var(--border-primary)'
+        }}>
+          <h3 style={{ 
+            fontSize: '24px', 
+            fontWeight: 500, 
+            color: 'var(--text-primary)',
+            margin: 0
+          }}>{title}</h3>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-600"
+            className="transition-all"
+            style={{
+              width: '36px',
+              height: '36px',
+              borderRadius: '8px',
+              border: '1px solid var(--border-primary)',
+              background: 'transparent',
+              color: 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'var(--bg-tertiary)';
+              e.currentTarget.style.borderColor = 'var(--orange-primary)';
+              e.currentTarget.style.color = 'var(--orange-primary)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.borderColor = 'var(--border-primary)';
+              e.currentTarget.style.color = 'var(--text-secondary)';
+            }}
           >
-            <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
-        <div className="p-6 overflow-y-auto max-h-[70vh]">
+        <div style={{ 
+          padding: '32px', 
+          overflowY: 'auto',
+          flex: 1
+        }}>
           {renderContent()}
         </div>
       </div>
@@ -228,6 +306,16 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
         auto_sync_recall: true,
       });
 
+      console.log('🤖 Loaded bots:', response.data.length, 'bots');
+      response.data.forEach((bot, index) => {
+        console.log(`  Bot ${index + 1}:`, {
+          bot_id: bot.bot_id,
+          meeting_title: bot.meeting_title,
+          meeting_url: bot.meeting_url,
+          meeting_id: bot.meeting_id
+        });
+      });
+
       setBots(response.data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load meetings');
@@ -245,17 +333,20 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
   // Action handlers
   const handleGetTranscript = async (botId: string) => {
     try {
+      console.log('🎯 handleGetTranscript called with botId:', botId);
       setActionLoading(prev => ({ ...prev, [`transcript-${botId}`]: true }));
       
       const response = await meetingService.getBotTranscript(botId);
+      console.log('📄 Transcript response received for botId:', botId, response);
       
       // Show transcript in modal
       showModal(
-        `Transcript for Bot ${botId.substring(0, 8)}...`,
+        'Transcript',
         response,
         'transcript'
       );
     } catch (err) {
+      console.error('❌ Transcript error for botId:', botId, err);
       alert(`Failed to get transcript: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setActionLoading(prev => ({ ...prev, [`transcript-${botId}`]: false }));
@@ -264,23 +355,24 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
 
   const handleGetSummary = async (botId: string) => {
     try {
+      console.log('🎯 handleGetSummary called with botId:', botId);
       setActionLoading(prev => ({ ...prev, [`summary-${botId}`]: true }));
       
-      console.log('Generating summary for bot:', botId); // Debug log
+      console.log('Generating summary for bot:', botId);
       
       // Use the same working endpoint as transcripts page
       const summaryResponse = await summarizationService.generateForBot(botId);
       
-      console.log('Summary response:', summaryResponse); // Debug log
+      console.log('📊 Summary response received for botId:', botId, summaryResponse);
 
       // Show summary in modal
       showModal(
-        `Summary for Bot ${botId.substring(0, 8)}...`,
+        'Summary',
         summaryResponse,
         'summary'
       );
     } catch (err) {
-      console.error('Summary error:', err); // Debug log
+      console.error('❌ Summary error for botId:', botId, err);
       alert(`Failed to get summary: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setActionLoading(prev => ({ ...prev, [`summary-${botId}`]: false }));
@@ -289,9 +381,11 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
 
   const handleGetRecording = async (botId: string) => {
     try {
+      console.log('🎯 handleGetRecording called with botId:', botId);
       setActionLoading(prev => ({ ...prev, [`recording-${botId}`]: true }));
       
       const response = await meetingService.getBotRecordingUrlSimple(botId);
+      console.log('🎥 Recording response received for botId:', botId, response);
       
       if (response.download_url) {
         // Show recording info in modal
@@ -304,6 +398,7 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
         throw new Error('No recording URL available');
       }
     } catch (err) {
+      console.error('❌ Recording error for botId:', botId, err);
       alert(`Failed to get recording: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setActionLoading(prev => ({ ...prev, [`recording-${botId}`]: false }));
@@ -317,7 +412,10 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
   if (isInitialLoad) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+        <div
+          className="animate-spin rounded-full h-12 w-12 border-2"
+          style={{ borderColor: 'var(--color-primary)', borderTopColor: 'transparent' }}
+        ></div>
       </div>
     );
   }
@@ -325,12 +423,12 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <div className="text-red-600 text-center">
+        <div className="text-foreground text-center">
           <h2 className="text-xl font-semibold mb-2">Error</h2>
-          <p>{error}</p>
+          <p className="text-muted-foreground">{error}</p>
           <button
             onClick={() => { loadBots(true); }}
-            className="mt-4 px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+            className="mt-4 btn btn-primary px-4 py-2"
           >
             Retry
           </button>
@@ -342,22 +440,21 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center" style={{ marginBottom: '32px' }}>
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">All Meetings</h1>
-          <p className="text-gray-600">View and manage all your meeting bots and recordings</p>
+          <h1 className="page-title" style={{ marginBottom: '8px', color: 'var(--text-primary)', fontSize: '36px', fontWeight: 700 }}>All Meetings</h1>
           
           {/* Auto-sync status indicator */}
-          <div className="mt-2 flex items-center space-x-4">
-            <div className="flex items-center space-x-2">
-              <div className={`w-2 h-2 rounded-full ${isRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`}></div>
-              <span className="text-sm text-gray-600">
+          <div className="mt-2 flex items-center gap-4">
+            <div className="flex items-center gap-2">
+              <div className={`w-2 h-2 rounded-full ${isRunning ? 'bg-primary animate-pulse' : 'bg-muted-foreground/50'}`}></div>
+              <span className="text-sm text-muted-foreground">
                 {isRunning ? 'Auto-sync active' : 'Auto-sync inactive'}
               </span>
             </div>
             
             {lastSyncInfo && (
-              <div className="text-sm text-green-600 font-medium">
+              <div className="text-sm text-primary font-medium">
                 {lastSyncInfo}
               </div>
             )}
@@ -365,26 +462,51 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
         </div>
         
         {/* Sort Controls */}
-        <div className="flex items-center space-x-4">
+        <div className="flex items-center gap-3">
           <button
             onClick={forceSync}
-            className="px-3 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 text-sm"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-all"
+            style={{
+              background: 'transparent',
+              borderColor: 'var(--border-primary)',
+              color: 'var(--text-primary)'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'var(--bg-tertiary)';
+              e.currentTarget.style.borderColor = 'var(--orange-primary)';
+              e.currentTarget.style.color = 'var(--orange-primary)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'transparent';
+              e.currentTarget.style.borderColor = 'var(--border-primary)';
+              e.currentTarget.style.color = 'var(--text-primary)';
+            }}
             title="Force immediate sync"
           >
-            🔄 Sync Now
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Sync Now
           </button>
-          <label className="text-sm font-medium text-gray-700">Sort by:</label>
-          <select
-            value={sortOrder}
-            onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
-            className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
-            <option value="desc">Newest First</option>
-            <option value="asc">Oldest First</option>
-          </select>
+          <div className="flex items-center gap-2">
+            <label className="text-sm font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>Sort by:</label>
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
+              className="px-4 py-2 rounded-lg border text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary min-w-[150px]"
+              style={{
+                background: 'var(--bg-secondary)',
+                borderColor: 'var(--border-primary)',
+                color: 'var(--text-primary)'
+              }}
+            >
+              <option value="desc">Newest First</option>
+              <option value="asc">Oldest First</option>
+            </select>
+          </div>
           <button
             onClick={() => { loadBots(true); }}
-            className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"
+            className="btn btn-primary"
           >
             Refresh
           </button>
@@ -393,52 +515,170 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
 
       {/* Meetings Table */}
       {bots.length === 0 ? (
-        <div className="text-center py-12">
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No meetings found</h3>
-          <p className="text-gray-600">You don't have any meeting bots yet.</p>
+        <div className="text-center flex flex-col items-center justify-center" style={{ padding: '80px 40px', background: 'transparent' }}>
+          {/* Custom Orange Meeting/Calendar Illustration */}
+          <svg 
+            width="120" 
+            height="120" 
+            viewBox="0 0 120 120" 
+            fill="none" 
+            xmlns="http://www.w3.org/2000/svg"
+            style={{ marginBottom: '32px' }}
+          >
+            {/* Calendar background */}
+            <rect x="20" y="25" width="80" height="70" rx="8" fill="#FFF8F0" stroke="#D97757" strokeWidth="2"/>
+            
+            {/* Calendar header bar */}
+            <rect x="20" y="25" width="80" height="15" rx="8" fill="#D97757"/>
+            <rect x="20" y="32" width="80" height="8" fill="#D97757"/>
+            
+            {/* Binding rings */}
+            <circle cx="35" cy="32" r="3" fill="#FAF9F6" stroke="#D97757" strokeWidth="1.5"/>
+            <circle cx="60" cy="32" r="3" fill="#FAF9F6" stroke="#D97757" strokeWidth="1.5"/>
+            <circle cx="85" cy="32" r="3" fill="#FAF9F6" stroke="#D97757" strokeWidth="1.5"/>
+            
+            {/* Calendar grid - Week 1 */}
+            <rect x="28" y="48" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="40" y="48" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="52" y="48" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="64" y="48" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="76" y="48" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="88" y="48" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            
+            {/* Calendar grid - Week 2 */}
+            <rect x="28" y="60" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="40" y="60" width="8" height="8" rx="2" fill="#D97757"/>
+            <rect x="52" y="60" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="64" y="60" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="76" y="60" width="8" height="8" rx="2" fill="#D97757"/>
+            <rect x="88" y="60" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            
+            {/* Calendar grid - Week 3 */}
+            <rect x="28" y="72" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="40" y="72" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="52" y="72" width="8" height="8" rx="2" fill="#D97757"/>
+            <rect x="64" y="72" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="76" y="72" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="88" y="72" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            
+            {/* Calendar grid - Week 4 */}
+            <rect x="28" y="84" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="40" y="84" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="52" y="84" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="64" y="84" width="8" height="8" rx="2" fill="#D97757"/>
+            <rect x="76" y="84" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            <rect x="88" y="84" width="8" height="8" rx="2" fill="#E8E8E8"/>
+            
+            {/* Video camera icon overlay */}
+            <circle cx="85" cy="75" r="18" fill="#D97757" opacity="0.9"/>
+            <rect x="77" y="70" width="10" height="8" rx="1.5" fill="white"/>
+            <path d="M87 71 L92 68 L92 77 L87 74 Z" fill="white"/>
+            <circle cx="80" cy="72" r="1" fill="#D97757"/>
+          </svg>
+          
+          {/* Text Content */}
+          <h3 style={{ 
+            fontSize: '20px', 
+            fontWeight: 600, 
+            marginBottom: '8px',
+            color: 'var(--text-primary)'
+          }}>
+            No meetings found
+          </h3>
+          <p style={{ 
+            fontSize: '14px', 
+            color: 'var(--text-secondary)',
+            marginBottom: '24px'
+          }}>
+            You don't have any meeting bots yet.
+          </p>
+          
+          {/* CTA Button */}
+          <button
+            onClick={forceSync}
+            style={{
+              backgroundColor: 'var(--orange-primary)',
+              color: 'white',
+              padding: '12px 24px',
+              borderRadius: '8px',
+              fontSize: '14px',
+              fontWeight: 500,
+              border: 'none',
+              cursor: 'pointer',
+              transition: 'opacity 0.2s ease'
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
+            onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+          >
+            Create Your First Meeting
+          </button>
         </div>
       ) : (
-        <div className="bg-white shadow-sm rounded-lg overflow-hidden">
+        <div className="overflow-hidden" style={{
+          background: 'var(--bg-secondary)',
+          border: '1px solid var(--border-primary)',
+          borderRadius: '12px',
+          boxShadow: 'var(--shadow-sm)'
+        }}>
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
+            <table className="min-w-full" style={{ borderCollapse: 'collapse' }}>
+              <thead style={{
+                background: 'var(--bg-tertiary)',
+                borderBottom: '2px solid var(--border-primary)'
+              }}>
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Bot ID
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider" style={{
+                    color: 'var(--text-secondary)',
+                    letterSpacing: '0.05em'
+                  }}>
                     Meeting Title
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider" style={{
+                    color: 'var(--text-secondary)',
+                    letterSpacing: '0.05em'
+                  }}>
                     Meeting URL
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider" style={{
+                    color: 'var(--text-secondary)',
+                    letterSpacing: '0.05em'
+                  }}>
                     Meeting Date
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider" style={{
+                    color: 'var(--text-secondary)',
+                    letterSpacing: '0.05em'
+                  }}>
                     Platform
                   </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-6 py-4 text-left text-xs font-semibold uppercase tracking-wider" style={{
+                    color: 'var(--text-secondary)',
+                    letterSpacing: '0.05em'
+                  }}>
                     Actions
                   </th>
                 </tr>
               </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
+              <tbody style={{ background: 'transparent' }}>
                 {bots.map((bot) => (
-                  <tr key={bot.bot_id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-gray-900">
-                      {bot.bot_id.substring(0, 8)}...
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  <tr key={bot.bot_id} className="transition-colors" style={{
+                    borderBottom: '1px solid var(--border-primary)'
+                  }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = 'var(--bg-tertiary)'}
+                  onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+                    <td className="px-6 py-5 whitespace-nowrap text-sm" style={{ color: 'var(--text-primary)' }}>
                       {bot.meeting_title || 'N/A'}
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-900">
+                    <td className="px-6 py-5 text-sm">
                       {bot.meeting_url ? (
                         <a
                           href={bot.meeting_url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-indigo-600 hover:text-indigo-900 hover:underline truncate block max-w-xs"
+                          className="hover:underline truncate block max-w-xs transition-colors"
+                          style={{ color: 'var(--orange-primary)' }}
+                          onMouseEnter={(e) => e.currentTarget.style.color = 'var(--orange-hover)'}
+                          onMouseLeave={(e) => e.currentTarget.style.color = 'var(--orange-primary)'}
                         >
                           {bot.meeting_url}
                         </a>
@@ -446,59 +686,152 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
                         'N/A'
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                    <td className="px-6 py-5 whitespace-nowrap text-sm" style={{ color: 'var(--text-primary)' }}>
                       {bot.meeting_scheduled_time ? formatDate(bot.meeting_scheduled_time) : 'N/A'}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      <span className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-800 rounded-md">
+                    <td className="px-6 py-5 whitespace-nowrap text-sm">
+                      <span className="px-3 py-1.5 text-xs font-medium rounded-xl" style={{
+                        background: 'var(--bg-tertiary)',
+                        border: '1px solid var(--border-primary)',
+                        color: 'var(--text-secondary)'
+                      }}>
                         {bot.platform || 'Unknown'}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
-                      <button
-                        onClick={() => handleGetTranscript(bot.bot_id)}
-                        disabled={actionLoading[`transcript-${bot.bot_id}`]}
-                        className="inline-flex items-center px-3 py-1 text-xs font-medium text-blue-600 bg-blue-100 rounded-md hover:bg-blue-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {actionLoading[`transcript-${bot.bot_id}`] ? (
-                          <>
-                            <div className="animate-spin rounded-full h-3 w-3 border-b border-blue-600 mr-1"></div>
-                            Loading...
-                          </>
-                        ) : (
-                          '📝 Transcript'
-                        )}
-                      </button>
-                      
-                      <button
-                        onClick={() => handleGetSummary(bot.bot_id)}
-                        disabled={actionLoading[`summary-${bot.bot_id}`]}
-                        className="inline-flex items-center px-3 py-1 text-xs font-medium text-green-600 bg-green-100 rounded-md hover:bg-green-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {actionLoading[`summary-${bot.bot_id}`] ? (
-                          <>
-                            <div className="animate-spin rounded-full h-3 w-3 border-b border-green-600 mr-1"></div>
-                            Loading...
-                          </>
-                        ) : (
-                          '📋 Summary'
-                        )}
-                      </button>
-                      
-                      <button
-                        onClick={() => handleGetRecording(bot.bot_id)}
-                        disabled={actionLoading[`recording-${bot.bot_id}`]}
-                        className="inline-flex items-center px-3 py-1 text-xs font-medium text-purple-600 bg-purple-100 rounded-md hover:bg-purple-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {actionLoading[`recording-${bot.bot_id}`] ? (
-                          <>
-                            <div className="animate-spin rounded-full h-3 w-3 border-b border-purple-600 mr-1"></div>
-                            Loading...
-                          </>
-                        ) : (
-                          '📹 Recording'
-                        )}
-                      </button>
+                    <td className="px-6 py-5">
+                      <div className="flex flex-col gap-2">
+                        {/* Transcript Button */}
+                        <button
+                          onClick={() => handleGetTranscript(bot.bot_id)}
+                          disabled={actionLoading[`transcript-${bot.bot_id}`]}
+                          className="group relative inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed w-full justify-start"
+                          style={{
+                            background: actionLoading[`transcript-${bot.bot_id}`] ? 'rgba(224, 120, 86, 0.1)' : 'transparent',
+                            border: '1px solid rgba(224, 120, 86, 0.3)',
+                            color: '#E07856'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!actionLoading[`transcript-${bot.bot_id}`]) {
+                              e.currentTarget.style.background = '#E07856';
+                              e.currentTarget.style.color = 'white';
+                              e.currentTarget.style.borderColor = '#E07856';
+                              e.currentTarget.style.transform = 'translateY(-1px)';
+                              e.currentTarget.style.boxShadow = '0 4px 12px rgba(224, 120, 86, 0.3)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!actionLoading[`transcript-${bot.bot_id}`]) {
+                              e.currentTarget.style.background = 'transparent';
+                              e.currentTarget.style.color = '#E07856';
+                              e.currentTarget.style.borderColor = 'rgba(224, 120, 86, 0.3)';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                              e.currentTarget.style.boxShadow = 'none';
+                            }
+                          }}
+                        >
+                          {actionLoading[`transcript-${bot.bot_id}`] ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                              <span>Loading...</span>
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                              </svg>
+                              <span>Transcript</span>
+                            </>
+                          )}
+                        </button>
+                        
+                        {/* Summary Button */}
+                        <button
+                          onClick={() => handleGetSummary(bot.bot_id)}
+                          disabled={actionLoading[`summary-${bot.bot_id}`]}
+                          className="group relative inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed w-full justify-start"
+                          style={{
+                            background: actionLoading[`summary-${bot.bot_id}`] ? 'rgba(91, 155, 213, 0.1)' : 'transparent',
+                            border: '1px solid rgba(91, 155, 213, 0.3)',
+                            color: '#7BAED9'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!actionLoading[`summary-${bot.bot_id}`]) {
+                              e.currentTarget.style.background = '#5B9BD5';
+                              e.currentTarget.style.color = 'white';
+                              e.currentTarget.style.borderColor = '#5B9BD5';
+                              e.currentTarget.style.transform = 'translateY(-1px)';
+                              e.currentTarget.style.boxShadow = '0 4px 12px rgba(91, 155, 213, 0.3)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!actionLoading[`summary-${bot.bot_id}`]) {
+                              e.currentTarget.style.background = 'transparent';
+                              e.currentTarget.style.color = '#7BAED9';
+                              e.currentTarget.style.borderColor = 'rgba(91, 155, 213, 0.3)';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                              e.currentTarget.style.boxShadow = 'none';
+                            }
+                          }}
+                        >
+                          {actionLoading[`summary-${bot.bot_id}`] ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                              <span>Loading...</span>
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
+                              </svg>
+                              <span>Summary</span>
+                            </>
+                          )}
+                        </button>
+                        
+                        {/* Recording Button */}
+                        <button
+                          onClick={() => handleGetRecording(bot.bot_id)}
+                          disabled={actionLoading[`recording-${bot.bot_id}`]}
+                          className="group relative inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed w-full justify-start"
+                          style={{
+                            background: actionLoading[`recording-${bot.bot_id}`] ? 'rgba(240, 133, 102, 0.1)' : 'transparent',
+                            border: '1px solid rgba(240, 133, 102, 0.3)',
+                            color: '#F08566'
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!actionLoading[`recording-${bot.bot_id}`]) {
+                              e.currentTarget.style.background = '#F08566';
+                              e.currentTarget.style.color = 'white';
+                              e.currentTarget.style.borderColor = '#F08566';
+                              e.currentTarget.style.transform = 'translateY(-1px)';
+                              e.currentTarget.style.boxShadow = '0 4px 12px rgba(240, 133, 102, 0.3)';
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!actionLoading[`recording-${bot.bot_id}`]) {
+                              e.currentTarget.style.background = 'transparent';
+                              e.currentTarget.style.color = '#F08566';
+                              e.currentTarget.style.borderColor = 'rgba(240, 133, 102, 0.3)';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                              e.currentTarget.style.boxShadow = 'none';
+                            }
+                          }}
+                        >
+                          {actionLoading[`recording-${bot.bot_id}`] ? (
+                            <>
+                              <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                              <span>Loading...</span>
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                              </svg>
+                              <span>Recording</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}

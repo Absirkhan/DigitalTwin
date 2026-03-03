@@ -143,6 +143,17 @@ class SimpleAutoJoinScheduler:
                     db.commit()
                     logger.info(f"✅ Successfully auto-joined meeting {meeting.id} with bot {response.bot_id}")
                     
+                    # Schedule automatic meeting completion check
+                    if meeting.end_time:
+                        try:
+                            from app.api.v1.endpoints.meetings import schedule_meeting_completion_check
+                            schedule_meeting_completion_check(response.bot_id, meeting.end_time)
+                            logger.info(f"⏰ Scheduled completion check for bot {response.bot_id} at {meeting.end_time}")
+                        except Exception as schedule_error:
+                            logger.warning(f"⚠️ Failed to schedule completion check: {schedule_error}")
+                    else:
+                        logger.warning(f"⚠️ Meeting {meeting.id} has no end_time, cannot schedule completion check")
+                    
                 else:
                     # Handle failed response
                     error_msg = response.message if hasattr(response, 'message') else 'Unknown error'

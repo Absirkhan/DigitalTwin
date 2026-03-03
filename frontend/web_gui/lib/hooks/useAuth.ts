@@ -18,10 +18,23 @@ export function useAuth() {
   // Check if user is authenticated on mount
   useEffect(() => {
     const token = getAuthToken();
+    console.log('useAuth: Checking authentication, token present:', !!token);
     if (token) {
       fetchUser();
     } else {
-      setIsLoading(false);
+      // Give it a moment in case token is being set (during OAuth callback)
+      const recheckTimeout = setTimeout(() => {
+        const recheckToken = getAuthToken();
+        if (recheckToken) {
+          console.log('useAuth: Token found on recheck');
+          fetchUser();
+        } else {
+          console.log('useAuth: No token found');
+          setIsLoading(false);
+        }
+      }, 200);
+      
+      return () => clearTimeout(recheckTimeout);
     }
   }, []);
 
@@ -29,11 +42,25 @@ export function useAuth() {
     setIsLoading(true);
     setError(null);
     try {
+      console.log('useAuth: Fetching user data...');
       const userData = await userService.getMe();
+      console.log('useAuth: User data received:', userData?.email);
       setUser(userData);
       setIsAuthenticated(true);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch user');
+    } catch (err: any) {
+      // Check if this is an expected authentication error
+      const isAuthError = err?.isAuthError || (err instanceof Error && err.message.includes('Could not validate credentials'));
+      
+      if (isAuthError) {
+        // Clear invalid token from storage
+        console.log('useAuth: Invalid token detected, clearing from storage');
+        localStorage.removeItem('access_token');
+        sessionStorage.removeItem('access_token');
+      } else {
+        console.error('useAuth: Failed to fetch user:', err);
+      }
+      
+      setError(null); // Don't set error for expected auth failures
       setIsAuthenticated(false);
       setUser(null);
     } finally {

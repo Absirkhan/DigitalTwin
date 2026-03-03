@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { meetingService, summarizationService } from '@/lib/api';
 import type { Meeting, FormattedTranscript, SummarizationResponse, MeetingUpdate } from '@/lib/api/types';
+import { FormattedSummaryDisplay } from '@/app/components/FormattedSummaryDisplay';
 
 export default function MeetingDetailPage() {
   const params = useParams();
@@ -152,34 +153,37 @@ export default function MeetingDetailPage() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+        <div
+          className="animate-spin rounded-full h-12 w-12 border-2"
+          style={{ borderColor: 'var(--color-primary)', borderTopColor: 'transparent' }}
+        ></div>
       </div>
     );
   }
 
   if (!meeting) {
-    return <div className="text-center py-8 text-gray-500">Meeting not found</div>;
+    return <div className="text-center py-8 text-muted-foreground">Meeting not found</div>;
   }
 
   return (
-    <div className="space-y-6">
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '48px' }}>
       {/* Header */}
-      <div className="md:flex md:items-center md:justify-between">
+      <div className="md:flex md:items-center md:justify-between" style={{ marginBottom: '32px' }}>
         <div className="flex-1 min-w-0">
-          <h2 className="text-2xl font-bold leading-7 text-gray-900 sm:text-3xl sm:truncate">
+          <h2 className="page-title" style={{ color: 'var(--text-primary)', fontSize: '36px', fontWeight: 700 }}>
             {meeting.title}
           </h2>
         </div>
         <div className="mt-4 flex md:mt-0 md:ml-4 space-x-3">
           <button
             onClick={() => setIsEditing(!isEditing)}
-            className="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50"
+            className="btn btn-outline px-4 py-2 text-sm"
           >
             {isEditing ? '❌ Cancel' : '✏️ Edit'}
           </button>
           <button
             onClick={handleDelete}
-            className="inline-flex items-center px-4 py-2 border border-red-300 rounded-md shadow-sm text-sm font-medium text-red-700 bg-white hover:bg-red-50"
+            className="btn btn-outline px-4 py-2 text-sm"
           >
             🗑️ Delete
           </button>
@@ -188,32 +192,32 @@ export default function MeetingDetailPage() {
 
       {/* Edit Form */}
       {isEditing && (
-        <div className="bg-white shadow sm:rounded-lg p-6">
+        <div className="card p-6">
           <form onSubmit={handleUpdate} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700">Title</label>
+              <label className="block text-sm font-medium text-foreground">Title</label>
               <input
                 type="text"
                 value={editForm.title || ''}
                 onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                className="input mt-1 w-full"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Description</label>
+              <label className="block text-sm font-medium text-foreground">Description</label>
               <textarea
                 rows={3}
                 value={editForm.description || ''}
                 onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                className="input mt-1 w-full"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Status</label>
+              <label className="block text-sm font-medium text-foreground">Status</label>
               <select
                 value={editForm.status || 'scheduled'}
                 onChange={(e) => setEditForm({ ...editForm, status: e.target.value as any })}
-                className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                className="input mt-1 w-full"
               >
                 <option value="scheduled">Scheduled</option>
                 <option value="in_progress">In Progress</option>
@@ -227,15 +231,15 @@ export default function MeetingDetailPage() {
                 id="autoJoinEdit"
                 checked={editForm.auto_join ?? false}
                 onChange={(e) => setEditForm({ ...editForm, auto_join: e.target.checked })}
-                className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                className="h-4 w-4 text-primary focus:ring-primary border-border rounded"
               />
-              <label htmlFor="autoJoinEdit" className="ml-2 block text-sm text-gray-700">
+              <label htmlFor="autoJoinEdit" className="ml-2 block text-sm text-foreground">
                 Enable auto-join for this meeting
               </label>
             </div>
             <button
               type="submit"
-              className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700"
+              className="btn btn-primary px-4 py-2 text-sm"
             >
               💾 Save Changes
             </button>
@@ -244,17 +248,17 @@ export default function MeetingDetailPage() {
       )}
 
       {/* Meeting Details */}
-      <div className="bg-white shadow sm:rounded-lg">
+      <div className="card">
         <div className="px-4 py-5 sm:p-6">
           <dl className="grid grid-cols-1 gap-x-4 gap-y-6 sm:grid-cols-2">
             <div>
-              <dt className="text-sm font-medium text-gray-500">Status</dt>
+              <dt className="text-sm font-medium text-muted-foreground">Status</dt>
               <dd className="mt-1">
                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                  meeting.status === 'completed' ? 'bg-green-100 text-green-800' :
-                  meeting.status === 'in_progress' ? 'bg-blue-100 text-blue-800' :
-                  meeting.status === 'scheduled' ? 'bg-yellow-100 text-yellow-800' :
-                  'bg-gray-100 text-gray-800'
+                  meeting.status === 'completed' ? 'bg-muted/10 text-muted-foreground' :
+                  meeting.status === 'in_progress' ? 'bg-primary/10 text-primary' :
+                  meeting.status === 'scheduled' ? 'bg-primary/10 text-primary' :
+                  'bg-muted text-muted-foreground'
                 }`}>
                   {meeting.status}
                 </span>
@@ -262,14 +266,14 @@ export default function MeetingDetailPage() {
             </div>
             {meeting.description && (
               <div className="sm:col-span-2">
-                <dt className="text-sm font-medium text-gray-500">Description</dt>
-                <dd className="mt-1 text-sm text-gray-900">{meeting.description}</dd>
+                <dt className="text-sm font-medium text-muted-foreground">Description</dt>
+                <dd className="mt-1 text-sm text-foreground">{meeting.description}</dd>
               </div>
             )}
             {meeting.meeting_url && (
               <div className="sm:col-span-2">
-                <dt className="text-sm font-medium text-gray-500">Meeting URL</dt>
-                <dd className="mt-1 text-sm text-indigo-600">
+                <dt className="text-sm font-medium text-muted-foreground">Meeting URL</dt>
+                <dd className="mt-1 text-sm text-primary">
                   <a href={meeting.meeting_url} target="_blank" rel="noopener noreferrer" className="hover:underline">
                     {meeting.meeting_url}
                   </a>
@@ -278,25 +282,25 @@ export default function MeetingDetailPage() {
             )}
             {meeting.start_time && (
               <div>
-                <dt className="text-sm font-medium text-gray-500">Start Time</dt>
-                <dd className="mt-1 text-sm text-gray-900">
+                <dt className="text-sm font-medium text-muted-foreground">Start Time</dt>
+                <dd className="mt-1 text-sm text-foreground">
                   {new Date(meeting.start_time).toLocaleString()}
                 </dd>
               </div>
             )}
             {meeting.end_time && (
               <div>
-                <dt className="text-sm font-medium text-gray-500">End Time</dt>
-                <dd className="mt-1 text-sm text-gray-900">
+                <dt className="text-sm font-medium text-muted-foreground">End Time</dt>
+                <dd className="mt-1 text-sm text-foreground">
                   {new Date(meeting.end_time).toLocaleString()}
                 </dd>
               </div>
             )}
             <div>
-              <dt className="text-sm font-medium text-gray-500">Auto-Join</dt>
+              <dt className="text-sm font-medium text-muted-foreground">Auto-Join</dt>
               <dd className="mt-1">
                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                  meeting.auto_join ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                  meeting.auto_join ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
                 }`}>
                   {meeting.auto_join ? '✅ Enabled' : '❌ Disabled'}
                 </span>
@@ -304,8 +308,8 @@ export default function MeetingDetailPage() {
             </div>
             {meeting.bot_id && (
               <div className="sm:col-span-2">
-                <dt className="text-sm font-medium text-gray-500">Bot ID</dt>
-                <dd className="mt-1 text-sm text-gray-900 font-mono bg-gray-50 px-2 py-1 rounded">
+                <dt className="text-sm font-medium text-muted-foreground">Bot ID</dt>
+                <dd className="mt-1 text-sm text-foreground font-mono bg-muted/30 px-2 py-1 rounded">
                   {meeting.bot_id}
                 </dd>
               </div>
@@ -315,14 +319,14 @@ export default function MeetingDetailPage() {
       </div>
 
       {/* Auto-Join Settings */}
-      <div className="bg-white shadow sm:rounded-lg">
+      <div className="card">
         <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">⚙️ Auto-Join Settings</h3>
+          <h3 className="text-lg font-medium text-foreground mb-4">⚙️ Auto-Join Settings</h3>
           
-          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+          <div className="flex items-center justify-between p-4 bg-accent rounded-lg">
             <div className="flex-1">
-              <h4 className="text-sm font-medium text-gray-900">Auto-Join Meeting</h4>
-              <p className="text-sm text-gray-500 mt-1">
+              <h4 className="text-sm font-medium text-foreground">Auto-Join Meeting</h4>
+              <p className="text-sm text-muted-foreground mt-1">
                 Automatically join this meeting when it starts. The bot will join and start recording/transcribing.
               </p>
             </div>
@@ -333,10 +337,10 @@ export default function MeetingDetailPage() {
                   type="checkbox"
                   checked={autoJoinEnabled}
                   onChange={(e) => setAutoJoinEnabled(e.target.checked)}
-                  className="h-4 w-4 text-indigo-600 focus:ring-indigo-500 border-gray-300 rounded"
+                  className="h-4 w-4 text-primary focus:ring-primary border-border rounded"
                   disabled={isUpdatingAutoJoin}
                 />
-                <span className="ml-2 text-sm text-gray-700">
+                <span className="ml-2 text-sm text-foreground">
                   {autoJoinEnabled ? 'Enabled' : 'Disabled'}
                 </span>
               </label>
@@ -344,7 +348,7 @@ export default function MeetingDetailPage() {
               <button
                 onClick={handleToggleAutoJoin}
                 disabled={isUpdatingAutoJoin}
-                className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="btn btn-primary px-3 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isUpdatingAutoJoin ? (
                   <>
@@ -363,30 +367,30 @@ export default function MeetingDetailPage() {
           
           {/* Status Indicator */}
           <div className="mt-4 flex items-center space-x-2">
-            <div className={`w-3 h-3 rounded-full ${autoJoinEnabled ? 'bg-green-500' : 'bg-gray-400'}`}></div>
-            <span className="text-sm text-gray-600">
-              Auto-join is currently <strong>{autoJoinEnabled ? 'enabled' : 'disabled'}</strong> for this meeting
+            <div className={`w-3 h-3 rounded-full ${autoJoinEnabled ? 'bg-primary' : 'bg-muted-foreground'}`}></div>
+            <span className="text-sm text-muted-foreground">
+              Auto-join is currently <strong className="text-foreground">{autoJoinEnabled ? 'enabled' : 'disabled'}</strong> for this meeting
             </span>
           </div>
         </div>
       </div>
 
       {/* Bot ID Input Section */}
-      <div className="bg-white shadow sm:rounded-lg">
+      <div className="card">
         <div className="px-4 py-5 sm:p-6">
-          <h3 className="text-lg font-medium text-gray-900 mb-4">🤖 Bot Controls</h3>
+          <h3 className="text-lg font-medium text-foreground mb-4">🤖 Bot Controls</h3>
           
           {/* Info Box */}
           {!meeting.bot_id && (
-            <div className="mb-4 bg-blue-50 border-l-4 border-blue-400 p-4">
+            <div className="mb-4 bg-primary/5 border-l-4 border-primary p-4">
               <div className="flex">
                 <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-blue-400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+                  <svg className="h-5 w-5 text-primary" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
                 </div>
                 <div className="ml-3">
-                  <p className="text-sm text-blue-700">
+                  <p className="text-sm text-foreground">
                     <strong>How to get a Bot ID:</strong>
                     <br />1. Go to the main meetings page
                     <br />2. Click "Join Meeting" and enter the meeting URL
@@ -400,8 +404,8 @@ export default function MeetingDetailPage() {
           
           <div className="space-y-4">
             <div>
-              <label htmlFor="botIdInput" className="block text-sm font-medium text-gray-700 mb-2">
-                Bot ID {meeting.bot_id && <span className="text-green-600">(Auto-filled from meeting)</span>}
+              <label htmlFor="botIdInput" className="block text-sm font-medium text-foreground mb-2">
+                Bot ID {meeting.bot_id && <span className="text-primary">(Auto-filled from meeting)</span>}
               </label>
               <div className="flex space-x-3">
                 <input
@@ -410,7 +414,7 @@ export default function MeetingDetailPage() {
                   value={botIdInput}
                   onChange={(e) => setBotIdInput(e.target.value)}
                   placeholder="Enter Bot ID (UUID)"
-                  className="flex-1 border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm font-mono"
+                  className="input flex-1 font-mono"
                 />
                 <button
                   onClick={() => {
@@ -420,19 +424,19 @@ export default function MeetingDetailPage() {
                     }
                   }}
                   disabled={!botIdInput || isLoadingTranscript}
-                  className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn btn-primary px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isLoadingTranscript ? '⏳ Loading...' : '📝 Load Transcript'}
                 </button>
                 <button
                   onClick={generateSummary}
                   disabled={!botIdInput || isGeneratingSummary}
-                  className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn btn-secondary px-4 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isGeneratingSummary ? '⏳ Generating...' : '✨ Generate Summary'}
                 </button>
               </div>
-              <p className="mt-2 text-sm text-gray-500">
+              <p className="mt-2 text-sm text-muted-foreground">
                 Enter the Bot ID to load transcript and generate AI summary. 
                 {!meeting.bot_id && ' You can get this ID after joining a meeting.'}
               </p>
@@ -443,13 +447,15 @@ export default function MeetingDetailPage() {
 
       {/* Summary Section */}
       {summary && summary.success && (
-        <div className="bg-white shadow sm:rounded-lg">
+        <div className="card">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">AI Summary</h3>
-            <div className="bg-gray-50 rounded-md p-4">
-              <p className="text-gray-700 whitespace-pre-wrap">{summary.summary}</p>
+            <h3 className="text-lg font-medium text-foreground mb-4">AI Summary</h3>
+            <div className="bg-accent rounded-md p-4">
+              {summary.summary && (
+                <FormattedSummaryDisplay summaryText={summary.summary} />
+              )}
               {summary.metrics && (
-                <div className="mt-4 flex items-center space-x-4 text-sm text-gray-500">
+                <div className="mt-4 flex items-center space-x-4 text-sm text-muted-foreground">
                   <span>Original: {summary.metrics.original_words || 0} words</span>
                   <span>•</span>
                   <span>Summary: {summary.metrics.summary_words || 0} words</span>
@@ -464,28 +470,28 @@ export default function MeetingDetailPage() {
 
       {/* Transcript Section */}
       {transcript && (
-        <div className="bg-white shadow sm:rounded-lg">
+        <div className="card">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Transcript</h3>
+            <h3 className="text-lg font-medium text-foreground mb-4">Transcript</h3>
             <div className="space-y-4">
-              <div className="bg-gray-50 rounded-md p-4 max-h-96 overflow-y-auto">
+              <div className="bg-accent rounded-md p-4 max-h-96 overflow-y-auto">
                 {transcript.speaker_segments && transcript.speaker_segments.length > 0 ? (
                   // Display speaker segments if available
                   transcript.speaker_segments.map((segment, index) => (
                     <div key={index} className="mb-3">
-                      <p className="text-sm font-medium text-gray-900">{segment.speaker}</p>
-                      <p className="text-sm text-gray-700">{segment.text}</p>
+                      <p className="text-sm font-medium text-foreground">{segment.speaker}</p>
+                      <p className="text-sm text-muted-foreground">{segment.text}</p>
                     </div>
                   ))
                 ) : (
                   // Fallback to clean continuous text
-                  <div className="whitespace-pre-wrap text-sm text-gray-700">
+                  <div className="whitespace-pre-wrap text-sm text-foreground">
                     {transcript.clean_continuous_text}
                   </div>
                 )}
               </div>
               {transcript.total_words && (
-                <p className="text-sm text-gray-500">Total words: {transcript.total_words}</p>
+                <p className="text-sm text-muted-foreground">Total words: {transcript.total_words}</p>
               )}
             </div>
           </div>
@@ -494,9 +500,9 @@ export default function MeetingDetailPage() {
 
       {/* Recording Section */}
       {recordingUrl && (
-        <div className="bg-white shadow sm:rounded-lg">
+        <div className="card">
           <div className="px-4 py-5 sm:p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">Recording</h3>
+            <h3 className="text-lg font-medium text-foreground mb-4">Recording</h3>
             <video
               controls
               className="w-full rounded-lg"

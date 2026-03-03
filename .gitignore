@@ -64,10 +64,12 @@ yarn-error.log*
 # AI Models
 models/weights/
 models/checkpoints/
+best_model/
 *.pkl
 *.pth
 *.h5
 *.onnx
+*.safetensors
 
 # Audio/Video files
 *.wav

@@ -22,11 +22,23 @@ export const authService = {
    * POST /api/v1/auth/google/token
    */
   exchangeCodeForToken: async (code: string, state?: string): Promise<{ access_token: string; token_type: string }> => {
+    console.log('exchangeCodeForToken: Sending request', {
+      codeLength: code?.length,
+      codePreview: code ? `${code.substring(0, 20)}...` : 'missing',
+      hasState: !!state,
+      state: state
+    });
+    
     const response = await post<{ access_token: string; token_type: string }>(
       '/api/v1/auth/google/token',
       { code, state },
       { requiresAuth: false }
     );
+    
+    console.log('exchangeCodeForToken: Response received', {
+      hasAccessToken: !!response.access_token,
+      tokenType: response.token_type
+    });
     
     // Store the token
     if (response.access_token) {
