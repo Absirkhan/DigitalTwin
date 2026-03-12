@@ -16,6 +16,7 @@ from app.services.auth import (
     get_current_user_bearer,
     refresh_google_tokens
 )
+from app.services.calendar import GoogleCalendarService
 
 router = APIRouter()
 
@@ -45,15 +46,25 @@ async def google_callback(code: str, state: str = None, db: Session = Depends(ge
         tokens = oauth_data['tokens']
         
         print(f"DEBUG: Got user info for: {user_info.get('email')}")
-        
+
         # Create or update user
         user = await create_or_update_user_from_google(db, user_info, tokens)
-        
+
         print(f"DEBUG: Created/updated user with ID: {user.id}")
-        
+
+        # Automatically setup calendar webhook for the user
+        try:
+            calendar_service = GoogleCalendarService()
+            webhook_result = await calendar_service.setup_calendar_webhook(user, db)
+            print(f"DEBUG: Calendar webhook auto-setup: {webhook_result.get('message', 'Success')}")
+        except Exception as webhook_error:
+            # Don't fail the login if webhook setup fails - just log it
+            print(f"DEBUG: Failed to auto-setup calendar webhook: {str(webhook_error)}")
+            print(f"DEBUG: User can manually setup webhook later")
+
         # Create JWT access token
         access_token = create_access_token(data={"sub": user.email})
-        
+
         print(f"DEBUG: Created access token: {access_token[:20]}...")
         
         # Return redirect with token in URL - you can copy this token from the browser address bar
@@ -78,13 +89,22 @@ async def google_token_exchange(callback_data: GoogleCallback, db: Session = Dep
         oauth_data = await exchange_code_for_tokens(callback_data.code)
         user_info = oauth_data['user_info']
         tokens = oauth_data['tokens']
-        
+
         # Create or update user
         user = await create_or_update_user_from_google(db, user_info, tokens)
-        
+
+        # Automatically setup calendar webhook for the user
+        try:
+            calendar_service = GoogleCalendarService()
+            webhook_result = await calendar_service.setup_calendar_webhook(user, db)
+            print(f"DEBUG: Calendar webhook auto-setup: {webhook_result.get('message', 'Success')}")
+        except Exception as webhook_error:
+            # Don't fail the login if webhook setup fails - just log it
+            print(f"DEBUG: Failed to auto-setup calendar webhook: {str(webhook_error)}")
+
         # Create JWT access token
         access_token = create_access_token(data={"sub": user.email})
-        
+
         return {"access_token": access_token, "token_type": "bearer"}
         
     except Exception as e:

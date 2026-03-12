@@ -1,14 +1,14 @@
 /**
- * Custom hook for automatic calendar synchronization and meeting updates
+ * Custom hook for automatic meeting updates
+ * Note: Calendar sync is handled by webhook, this only fetches latest meetings
  */
 
 import { useEffect, useRef, useCallback } from 'react';
-import { calendarService, meetingService } from '@/lib/api';
+import { meetingService } from '@/lib/api';
 import type { Meeting } from '@/lib/api/types';
 
 interface UseAutoSyncOptions {
   onMeetingsUpdate?: (meetings: Meeting[]) => void;
-  onSyncSuccess?: (eventsSynced: number) => void;
   onError?: (error: Error) => void;
   enabled?: boolean;
   syncInterval?: number; // in milliseconds, default 1000 (1 second)
@@ -16,7 +16,6 @@ interface UseAutoSyncOptions {
 
 export function useAutoSync({
   onMeetingsUpdate,
-  onSyncSuccess,
   onError,
   enabled = true,
   syncInterval = 1000
@@ -40,21 +39,13 @@ export function useAutoSync({
 
   const syncCalendarAndUpdateMeetings = useCallback(async () => {
     if (isRunningRef.current || !enabled) return;
-    
+
     isRunningRef.current = true;
-    
+
     try {
-      // Perform calendar sync (silently, don't show alerts)
-      const syncResult = await calendarService.sync();
-      
-      // Only call onSyncSuccess if events were actually synced
-      if (syncResult.events_synced > 0 && onSyncSuccess) {
-        onSyncSuccess(syncResult.events_synced);
-      }
-      
-      // Always fetch latest meetings after sync
+      // Fetch latest meetings (calendar sync removed, webhook handles calendar updates)
       const meetings = await meetingService.getAll();
-      
+
       // Check if meetings have changed by comparing hash
       const newHash = createMeetingsHash(meetings);
       if (newHash !== meetingsHashRef.current) {
@@ -63,9 +54,9 @@ export function useAutoSync({
           onMeetingsUpdate(meetings);
         }
       }
-      
+
       lastSyncRef.current = Date.now();
-      
+
     } catch (error) {
       console.error('Auto-sync error:', error);
       if (onError && error instanceof Error) {
@@ -74,7 +65,7 @@ export function useAutoSync({
     } finally {
       isRunningRef.current = false;
     }
-  }, [enabled, onMeetingsUpdate, onSyncSuccess, onError]);
+  }, [enabled, onMeetingsUpdate, onError]);
 
   const startAutoSync = useCallback(() => {
     if (intervalRef.current) return; // Already running

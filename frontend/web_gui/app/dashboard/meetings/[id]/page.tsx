@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { meetingService, summarizationService } from '@/lib/api';
+import { meetingService, summarizationService, getAuthToken } from '@/lib/api';
 import type { Meeting, FormattedTranscript, SummarizationResponse, MeetingUpdate } from '@/lib/api/types';
 import { FormattedSummaryDisplay } from '@/app/components/FormattedSummaryDisplay';
+import RealtimeTranscript from '@/app/components/RealtimeTranscript';
 
 export default function MeetingDetailPage() {
   const params = useParams();
@@ -444,6 +445,15 @@ export default function MeetingDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Real-Time Transcript Section */}
+      {meeting.status === 'in_progress' && (
+        <RealtimeTranscript
+          meetingId={meetingId}
+          token={getAuthToken() || ''}
+          className="h-[500px]"
+        />
+      )}
 
       {/* Summary Section */}
       {summary && summary.success && (

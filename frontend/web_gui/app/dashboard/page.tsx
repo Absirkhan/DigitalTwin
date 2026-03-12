@@ -12,7 +12,6 @@ export default function DashboardPage() {
   const [recentSummary, setRecentSummary] = useState<SummarizationResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
   const [isTokenReady, setIsTokenReady] = useState(false);
 
   // Wait for token to be available before loading data
@@ -31,22 +30,16 @@ export default function DashboardPage() {
     checkToken();
   }, []);
 
-  // Auto-sync hook for calendar and meetings
+  // Auto-sync hook for meetings (disabled - webhook handles all updates)
   const { isRunning, forceSync } = useAutoSync({
     onMeetingsUpdate: (updatedMeetings) => {
       setMeetings(updatedMeetings.slice(0, 5)); // Show only 5 most recent
       setIsLoading(false);
     },
-    onSyncSuccess: (eventsSynced) => {
-      if (eventsSynced > 0) {
-        setLastSyncInfo(`✅ Synced ${eventsSynced} events`);
-        setTimeout(() => setLastSyncInfo(''), 3000);
-      }
-    },
     onError: (error) => {
       console.error('Dashboard auto-sync error:', error);
     },
-    enabled: true,
+    enabled: false, // Disabled - only manual sync via button
     syncInterval: 1000 // 1 second
   });
 
@@ -78,11 +71,10 @@ export default function DashboardPage() {
   const handleSyncCalendar = async () => {
     setIsSyncing(true);
     try {
-      // Use the force sync from the hook instead
+      // Manually refresh meetings
       forceSync();
-      setLastSyncInfo('🔄 Manual sync triggered...');
     } catch (error) {
-      alert('Failed to sync calendar: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      alert('Failed to refresh meetings: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setIsSyncing(false);
     }
@@ -117,25 +109,10 @@ export default function DashboardPage() {
         <div className="flex-1 min-w-0">
           <h1 className="page-title" style={{ color: 'var(--text-primary)', fontSize: '36px', fontWeight: 700 }}>
             Dashboard
-          </h1>          
-          {/* Auto-sync status indicator */}
-          <div className="mt-4 flex items-center gap-4">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-accent border border-border">
-              <div className={`w-2 h-2 rounded-full ${isRunning ? 'bg-primary animate-pulse' : 'bg-muted-foreground'}`}></div>
-              <span className="text-xs font-medium text-foreground">
-                {isRunning ? 'Auto-sync active' : 'Auto-sync inactive'}
-              </span>
-            </div>
-
-            {lastSyncInfo && (
-              <div className="text-xs font-medium text-muted-foreground px-3 py-1.5 rounded-full bg-accent border border-border animate-scale-in flex items-center gap-1.5">
-                <svg className="w-3 h-3 text-primary" fill="currentColor" viewBox="0 0 20 20">
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-                {lastSyncInfo.replace('✅ ', '')}
-              </div>
-            )}
-          </div>
+          </h1>
+          <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+            Updates via webhook. Use Refresh button to manually update.
+          </p>
         </div>
         
         <div className="mt-6 flex gap-3 md:mt-0 md:ml-4">
@@ -147,7 +124,7 @@ export default function DashboardPage() {
             <svg className={`w-4 h-4 mr-2 ${isSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            {isSyncing ? 'Syncing...' : 'Sync Now'}
+            {isSyncing ? 'Refreshing...' : 'Refresh'}
           </button>
           <button
             onClick={handleGenerateSummary}

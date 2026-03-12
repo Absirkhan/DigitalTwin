@@ -9,6 +9,7 @@ from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, HTTPBearer
 from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from google.oauth2 import id_token
 from google.auth.transport import requests
 from google_auth_oauthlib.flow import Flow
@@ -145,8 +146,16 @@ async def exchange_code_for_tokens(code: str) -> Dict[str, Any]:
         )
 
 
-async def get_user_by_email(db: Session, email: str) -> Optional[User]:
-    return db.query(User).filter(User.email == email).first()
+async def get_user_by_email(db, email: str) -> Optional[User]:
+    """Get user by email - supports both Session and AsyncSession"""
+    # Check if it's an AsyncSession
+    if isinstance(db, AsyncSession):
+        from sqlalchemy import select
+        result = await db.execute(select(User).filter(User.email == email))
+        return result.scalar_one_or_none()
+    else:
+        # Synchronous Session
+        return db.query(User).filter(User.email == email).first()
 
 
 async def get_user_by_google_id(db: Session, google_id: str) -> Optional[User]:
@@ -266,7 +275,7 @@ async def refresh_google_tokens(db: Session, user: User) -> Dict[str, Any]:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No refresh token available"
         )
-    
+
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -280,21 +289,60 @@ async def refresh_google_tokens(db: Session, user: User) -> Dict[str, Any]:
             )
             response.raise_for_status()
             tokens = response.json()
-        
+
         # Update stored tokens
         user.oauth_tokens.update({
             'access_token': tokens['access_token'],
             'token_type': tokens.get('token_type', 'Bearer')
         })
-        
+
         if 'refresh_token' in tokens:
             user.oauth_tokens['refresh_token'] = tokens['refresh_token']
-        
+
         db.commit()
         return user.oauth_tokens
-        
+
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to refresh tokens: {str(e)}"
         )
+
+
+async def get_current_user_from_token(token: str, db: AsyncSession) -> User:
+    """
+    Get current user from JWT token string (for WebSocket authentication).
+
+    Similar to get_current_user but takes token directly as string parameter
+    instead of using Depends(). Useful for WebSocket endpoints where token
+    is passed as query parameter.
+
+    Args:
+        token: JWT token string
+        db: AsyncSession database session
+
+    Returns:
+        User object if token is valid
+
+    Raises:
+        HTTPException: If token is invalid or user not found
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+        token_data = TokenData(email=email)
+    except JWTError:
+        raise credentials_exception
+
+    user = await get_user_by_email(db, email=token_data.email)
+    if user is None:
+        raise credentials_exception
+    return user

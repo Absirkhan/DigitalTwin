@@ -753,12 +753,12 @@ async def join_meeting_with_url(
                     # platform and meeting_id can be populated later via webhooks or status checks
                 )
                 db.add(new_bot)
-                db.commit()
-                
+                # NOTE: Do NOT commit yet - we need to link to meeting first
+
                 # If video recording was enabled, note it in the response
                 if request.enable_video_recording:
                     response_data.message += " (Video recording enabled)"
-                
+
                 # Try to find and schedule meeting completion check
                 try:
                     # Try to find meeting associated with this meeting URL
@@ -771,23 +771,65 @@ async def join_meeting_with_url(
                         
                         if meeting:
                             logging.info(f"📅 Found meeting: ID={meeting.id}, Title='{meeting.title}', Status={meeting.status}, EndTime={meeting.end_time}")
+
+                            # Link bot to meeting
+                            new_bot.meeting_id = meeting.id
+
+                            # ===== UPDATE MEETING STATUS TO IN_PROGRESS =====
+                            # When bot joins, meeting is now in progress
+                            meeting.status = "in_progress"
+                            meeting.updated_at = datetime.utcnow()
+
+                            db.commit()
+                            logging.info(f"🔗 Linked bot {response_data.bot_id} to meeting {meeting.id}")
+                            logging.info(f"✅ Meeting {meeting.id} status updated to: in_progress")
+
+                            # Schedule automatic completion check
                             if meeting.end_time:
-                                # Link bot to meeting
-                                new_bot.meeting_id = meeting.id
-                                db.commit()
-                                logging.info(f"🔗 Linked bot {response_data.bot_id} to meeting {meeting.id}")
-                                
-                                # Schedule automatic completion check
                                 schedule_meeting_completion_check(response_data.bot_id, meeting.end_time)
-                            else:
-                                logging.warning(f"⚠️ Meeting {meeting.id} has no end_time set")
                         else:
-                            logging.warning(f"⚠️ No meeting found with URL: {request.meeting_url}")
+                            # No meeting found - create one automatically for manual join
+                            #logging.warning(f"⚠️ No meeting found with URL: {request.meeting_url}, creating one...")
+
+                            current_time = datetime.utcnow()
+                            new_meeting = Meeting(
+                                title=f"Meeting at {current_time.strftime('%Y-%m-%d %H:%M')}",
+                                description="Auto-created from manual bot join",
+                                meeting_url=request.meeting_url,
+                                platform="google_meet" if "meet.google" in request.meeting_url else "other",
+                                user_id=current_user.id,
+                                status="in_progress",  # Started immediately
+                                scheduled_time=current_time,
+                                start_time=current_time,  # Required by DB constraint
+                                end_time=None,  # Will be set when meeting ends
+                                duration_minutes=60,
+                                auto_join=False
+                            )
+                            db.add(new_meeting)
+                            db.flush()  # Get the meeting ID
+
+                            # Link bot to this new meeting
+                            new_bot.meeting_id = new_meeting.id
+                            db.commit()
+
+                            logging.info(f"✅ Auto-created meeting {new_meeting.id} and linked to bot {response_data.bot_id}")
+                            logging.info(f"✅ Meeting status: in_progress")
                     else:
                         logging.warning(f"⚠️ No meeting_url provided in request")
+                        # Still need to commit the bot even if no meeting URL
+                        db.commit()
                 except Exception as schedule_error:
                     # Don't fail the join if scheduling fails
                     logging.error(f"❌ Failed to schedule completion check for bot {response_data.bot_id}: {schedule_error}", exc_info=True)
+                    # Rollback and commit the bot even if meeting linkage failed
+                    try:
+                        db.rollback()  # Rollback failed transaction first
+                        db.add(new_bot)  # Re-add the bot
+                        db.commit()  # Commit just the bot without meeting linkage
+                        logging.info(f"⚠️ Bot {response_data.bot_id} saved without meeting linkage")
+                    except Exception as commit_error:
+                        logging.error(f"❌ Failed to commit bot: {commit_error}", exc_info=True)
+                        db.rollback()
 
         return response_data
 
@@ -2139,26 +2181,26 @@ async def check_all_meetings_completion(
     """
     Check all user's in-progress meetings and mark as completed if end time has passed.
     This is a manual trigger for checking meeting statuses.
-    
+
     Returns:
         dict: Summary of meetings checked and updated
     """
     try:
         current_time = datetime.utcnow()
-        
+
         # Find all in-progress meetings for the user
         in_progress_meetings = db.query(Meeting).filter(
             Meeting.user_id == current_user.id,
             Meeting.status == "in_progress"
         ).all()
-        
+
         checked_count = len(in_progress_meetings)
         updated_count = 0
         updated_meetings = []
-        
+
         for meeting in in_progress_meetings:
             should_complete = False
-            
+
             # Check if meeting has an end time
             if meeting.end_time and current_time > meeting.end_time:
                 should_complete = True
@@ -2168,7 +2210,7 @@ async def check_all_meetings_completion(
                 calculated_end_time = meeting.scheduled_time + timedelta(minutes=meeting.duration_minutes)
                 if current_time > calculated_end_time:
                     should_complete = True
-            
+
             if should_complete:
                 meeting.status = "completed"
                 meeting.updated_at = datetime.utcnow()
@@ -2179,9 +2221,9 @@ async def check_all_meetings_completion(
                     "end_time": meeting.end_time.isoformat() if meeting.end_time else None
                 })
                 logging.info(f"✅ Manually completed meeting {meeting.id} ('{meeting.title}')")
-        
+
         db.commit()
-        
+
         return {
             "success": True,
             "checked_count": checked_count,
@@ -2190,11 +2232,77 @@ async def check_all_meetings_completion(
             "current_time": current_time.isoformat(),
             "message": f"Checked {checked_count} in-progress meetings, updated {updated_count} to completed"
         }
-        
+
     except Exception as e:
         db.rollback()
         logging.error(f"Error checking all meetings completion: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Failed to check meetings completion: {str(e)}"
+        )
+
+
+@router.post("/{meeting_id}/refresh-status-from-recall")
+async def refresh_meeting_status_from_recall(
+    meeting_id: int,
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db)
+):
+    """
+    Manually trigger a status check for a specific meeting by querying Recall.ai bot status.
+
+    This endpoint:
+    1. Finds the bot associated with the meeting
+    2. Queries Recall.ai for the bot's current status
+    3. Updates the meeting status to "completed" if the bot has finished
+
+    Use this when a meeting is stuck in "in_progress" status even though the host has ended it.
+
+    Returns:
+        dict: Status update information
+    """
+    try:
+        # Verify the meeting belongs to the current user
+        meeting = await get_meeting(db, meeting_id, current_user.id)
+        if not meeting:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        # Find the bot associated with this meeting
+        bot = db.query(Bot).filter(Bot.meeting_id == meeting_id).first()
+        if not bot:
+            raise HTTPException(
+                status_code=404,
+                detail="No bot found for this meeting. Cannot check Recall.ai status."
+            )
+
+        # Use the meeting status monitor to check this meeting
+        from app.services.meeting_status_monitor import get_meeting_status_monitor
+        monitor = get_meeting_status_monitor()
+        result = await monitor.check_meeting_now(meeting_id)
+
+        if not result.get("success"):
+            return {
+                "success": False,
+                "meeting_id": meeting_id,
+                "error": result.get("error", "Unknown error"),
+                "message": "Failed to check meeting status"
+            }
+
+        return {
+            "success": True,
+            "meeting_id": meeting_id,
+            "bot_id": bot.bot_id,
+            "old_status": result["old_status"],
+            "new_status": result["new_status"],
+            "status_changed": result["updated"],
+            "message": "Meeting status refreshed successfully from Recall.ai"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error refreshing meeting {meeting_id} status: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to refresh meeting status: {str(e)}"
         )

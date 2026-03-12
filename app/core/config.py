@@ -52,7 +52,16 @@ class Settings(BaseSettings):
     RECALL_API_KEY: str = ""
     RECALL_BASE_URL: str = "https://us-west-2.recall.ai/api/v1"
     RECALL_WEBSOCKET_URL: str = "wss://us-west-2.recall.ai/api/v1/realtime"
-    
+
+    # Real-Time Transcription WebSocket
+    REALTIME_WEBHOOK_URL: str = "http://localhost:8000/api/v1/realtime/webhook/recall"
+    WEBSOCKET_ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:3001"
+
+    @property
+    def websocket_origins_list(self) -> List[str]:
+        """Convert comma-separated origins string to list"""
+        return [origin.strip() for origin in self.WEBSOCKET_ALLOWED_ORIGINS.split(",")]
+
     # Voice Settings
     VOICE_MODEL_PATH: str = "models/voice/"
     RECORDING_PATH: str = "recordings/"
