@@ -6,9 +6,12 @@ import os
 import aiohttp
 import tempfile
 import json
+import logging
 
 #from app.services.cloudinary_service import upload_to_cloudinary
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 from app.schemas.meeting import (
     MeetingJoinRequest,
     MeetingJoinResponse,
@@ -71,46 +74,74 @@ class RecallAPIService:
             if hasattr(request, 'profile_picture') and request.profile_picture:
                 payload["avatar_url"] = request.profile_picture
 
-            # Add real-time endpoints for live processing if needed
-            if (
-                hasattr(request, "enable_realtime_processing")
-                and request.enable_realtime_processing
-            ):
-                # Use dedicated websocket URL from settings
-                websocket_url = getattr(settings, 'RECALL_WEBSOCKET_URL', None)
-                
-                # If no specific websocket URL, construct from base URL
-                if not websocket_url:
-                    websocket_base_url = settings.RECALL_BASE_URL.replace("https://", "wss://").replace("http://", "ws://")
-                    websocket_url = f"{websocket_base_url}/realtime"
-                
+            # ===== REAL-TIME TRANSCRIPTION =====
+            # Enable real-time webhook endpoint by default for low-latency transcript streaming
+            # This is ALWAYS ENABLED to provide live transcription to WebSocket clients
+
+            # Use our backend webhook URL (configured in settings)
+            webhook_url = getattr(settings, 'REALTIME_WEBHOOK_URL', None)
+
+            if webhook_url:
+                # Configure Recall.ai realtime endpoints at the ROOT of recording_config
+                # NOT nested under transcript.provider
+                # According to Recall.ai API docs, valid events are:
+                # - transcript.data (transcript utterances)
+                # - participant_events.* (join, leave, speech_on/off, etc.)
+                # Note: bot.status_change is NOT a valid realtime event
                 payload["recording_config"]["realtime_endpoints"] = [
                     {
-                        "type": "websocket",
-                        "url": websocket_url,
-                        "events": [
-                            "transcript.data",  # Real-time transcript events
-                            "audio_mixed_raw.data",  # Real-time audio events
-                        ],
+                        "url": webhook_url,
+                        "type": "webhook",  # REQUIRED: Specify endpoint type
+                        "events": ["transcript.data"]  # Only transcript.data for now
                     }
                 ]
+
+                logger.info(f"✅ Real-time transcription ENABLED: webhook={webhook_url}")
+            else:
+                logger.warning("⚠️ REALTIME_WEBHOOK_URL not configured - real-time transcription disabled")
 
             # Remove None values
             payload = {k: v for k, v in payload.items() if v is not None}
 
             async with httpx.AsyncClient(timeout=30.0) as client:
+                # Log the request payload (using print to ensure console output)
+                print("\n" + "="*80)
+                print("🚀 RECALL.AI BOT JOIN REQUEST")
+                print("="*80)
+                print(f"📦 Payload:\n{json.dumps(payload, indent=2)}")
+                print(f"🔗 API URL: {self.base_url}/bot")
+                print(f"🔑 API Key (first 10 chars): {self.api_key[:10]}...")
+                print("="*80 + "\n")
+
                 response = await client.post(
                     f"{self.base_url}/bot", headers=self.headers, json=payload
                 )
+
+                # Log the response
+                print("\n" + "="*80)
+                print("📥 RECALL.AI RESPONSE")
+                print("="*80)
+                print(f"📊 Status Code: {response.status_code}")
+                print(f"📄 Response Body:\n{response.text}")
+                print("="*80 + "\n")
+
                 # Check if response is successful
                 if response.status_code == 201:
                     try:
                         data = response.json()
+                        bot_id = data.get("id")
+
+                        print("\n" + "="*80)
+                        print("✅ BOT CREATED SUCCESSFULLY")
+                        print("="*80)
+                        print(f"🤖 Bot ID: {bot_id}")
+                        print(f"📋 Full response data:\n{json.dumps(data, indent=2)}")
+                        print("="*80 + "\n")
 
                         return MeetingJoinResponse(
                             success=True,
                             message="Successfully initiated bot to join meeting",
-                            bot_id=data.get("id"),
+                            bot_id=bot_id,
                             status="joining",
                             meeting_url=str(request.meeting_url),
                             bot_name=data.get("bot_name", request.bot_name)

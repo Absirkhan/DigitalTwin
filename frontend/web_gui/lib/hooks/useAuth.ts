@@ -54,8 +54,8 @@ export function useAuth() {
       if (isAuthError) {
         // Clear invalid token from storage
         console.log('useAuth: Invalid token detected, clearing from storage');
-        localStorage.removeItem('access_token');
-        sessionStorage.removeItem('access_token');
+        localStorage.removeItem('auth_token');
+        sessionStorage.removeItem('auth_token');
       } else {
         console.error('useAuth: Failed to fetch user:', err);
       }

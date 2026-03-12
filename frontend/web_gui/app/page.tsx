@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { getAuthToken } from '@/lib/api';
+import { getAuthToken, userService } from '@/lib/api';
 import './landing.css';
 
 export default function LandingPage() {
@@ -10,10 +10,25 @@ export default function LandingPage() {
 
   // Redirect to dashboard if already logged in
   useEffect(() => {
-    const token = getAuthToken();
-    if (token) {
-      router.push('/dashboard');
-    }
+    const checkAuth = async () => {
+      const token = getAuthToken();
+      if (token) {
+        // Validate the token before redirecting
+        try {
+          await userService.getMe();
+          // Token is valid, redirect to dashboard
+          router.push('/dashboard');
+        } catch (error) {
+          // Token is invalid or expired, clear it silently
+          console.log('Invalid token detected on landing page, clearing...');
+          localStorage.removeItem('auth_token');
+          sessionStorage.removeItem('auth_token');
+          // Stay on landing page
+        }
+      }
+    };
+
+    checkAuth();
   }, [router]);
 
   // Apply saved theme on mount

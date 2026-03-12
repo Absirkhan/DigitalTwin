@@ -1,9 +1,13 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find:*)",
-      "Bash(touch:*)",
-      "Bash(cat:*)"
+      "Bash(powershell -Command \"Test-Path ''C:\\Program Files\\Redis''\")",
+      "Bash(powershell -Command \"Get-ChildItem ''C:\\Program Files\\Redis'' | Select-Object Name\")",
+      "Bash(powershell -Command:*)",
+      "Bash(redis-cli.bat ping:*)",
+      "Bash(cmd /c redis-cli.bat ping)",
+      "Bash(timeout 10 python:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []

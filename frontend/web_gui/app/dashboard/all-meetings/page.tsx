@@ -244,24 +244,17 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
-  const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
 
-  // Auto-sync hook for calendar (will trigger bot data refresh)
+  // Auto-sync hook disabled - webhook handles all updates
   const { isRunning, forceSync } = useAutoSync({
     onMeetingsUpdate: () => {
       // When meetings are updated, refresh bots data without showing loading spinner
       loadBots(false);
     },
-    onSyncSuccess: (eventsSynced) => {
-      if (eventsSynced > 0) {
-        setLastSyncInfo(`✅ Synced ${eventsSynced} events at ${new Date().toLocaleTimeString()}`);
-        setTimeout(() => setLastSyncInfo(''), 3000);
-      }
-    },
     onError: (error) => {
       console.error('All-meetings auto-sync error:', error);
     },
-    enabled: true,
+    enabled: false, // Disabled - only manual refresh via button
     syncInterval: 1000 // 1 second
   });
   
@@ -443,22 +436,9 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
       <div className="flex justify-between items-center" style={{ marginBottom: '32px' }}>
         <div>
           <h1 className="page-title" style={{ marginBottom: '8px', color: 'var(--text-primary)', fontSize: '36px', fontWeight: 700 }}>All Meetings</h1>
-          
-          {/* Auto-sync status indicator */}
-          <div className="mt-2 flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${isRunning ? 'bg-primary animate-pulse' : 'bg-muted-foreground/50'}`}></div>
-              <span className="text-sm text-muted-foreground">
-                {isRunning ? 'Auto-sync active' : 'Auto-sync inactive'}
-              </span>
-            </div>
-            
-            {lastSyncInfo && (
-              <div className="text-sm text-primary font-medium">
-                {lastSyncInfo}
-              </div>
-            )}
-          </div>
+          <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+            Updates via webhook. Use Refresh button to manually update.
+          </p>
         </div>
         
         {/* Sort Controls */}
@@ -481,12 +461,12 @@ export default function AllMeetingsPage({}: AllMeetingsPageProps) {
               e.currentTarget.style.borderColor = 'var(--border-primary)';
               e.currentTarget.style.color = 'var(--text-primary)';
             }}
-            title="Force immediate sync"
+            title="Manually refresh meetings"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            Sync Now
+            Refresh
           </button>
           <div className="flex items-center gap-2">
             <label className="text-sm font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>Sort by:</label>

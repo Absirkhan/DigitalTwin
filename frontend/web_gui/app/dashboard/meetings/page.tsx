@@ -9,8 +9,11 @@ import type { Meeting, MeetingCreate, JoinMeetingRequest } from '@/lib/api/types
 // Meeting Card Component
 function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete: (id: number) => void }) {
   const formatMeetingTime = (dateString: string) => {
+    // Backend sends UTC time, add 5 hours for Pakistan timezone (UTC+5)
     const date = new Date(dateString);
-    return date.toLocaleString('en-US', {
+    const pakistanTime = new Date(date.getTime() + (5 * 60 * 60 * 1000));
+
+    return pakistanTime.toLocaleString('en-US', {
       weekday: 'short',
       month: 'short',
       day: 'numeric',
@@ -155,7 +158,6 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete: (id: n
 export default function MeetingsPage() {
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
-  const [lastSyncInfo, setLastSyncInfo] = useState<string>('');
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [newMeeting, setNewMeeting] = useState<MeetingCreate>({
@@ -177,20 +179,13 @@ export default function MeetingsPage() {
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Auto-sync hook for calendar and meetings
+  // Auto-sync hook for meetings (disabled - webhook handles all updates)
   const { isRunning, lastSync, forceSync } = useAutoSync({
     onMeetingsUpdate: (updatedMeetings) => {
       setMeetings(updatedMeetings);
       // Only turn off loading after initial data fetch
       if (isInitialLoad) {
         setIsInitialLoad(false);
-      }
-    },
-    onSyncSuccess: (eventsSynced) => {
-      if (eventsSynced > 0) {
-        setLastSyncInfo(`✅ Synced ${eventsSynced} events at ${new Date().toLocaleTimeString()}`);
-        // Clear the message after 3 seconds
-        setTimeout(() => setLastSyncInfo(''), 3000);
       }
     },
     onError: (error) => {
@@ -201,9 +196,24 @@ export default function MeetingsPage() {
         setIsInitialLoad(false);
       }
     },
-    enabled: true,
+    enabled: false, // Disabled - only manual refresh via button
     syncInterval: 1000 // 1 second
   });
+
+  // Load initial meetings on mount
+  useEffect(() => {
+    const loadMeetings = async () => {
+      try {
+        const data = await meetingService.getAll();
+        setMeetings(data);
+      } catch (error) {
+        console.error('Failed to load meetings:', error);
+      } finally {
+        setIsInitialLoad(false);
+      }
+    };
+    loadMeetings();
+  }, []);
 
   const handleCreateMeeting = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -279,33 +289,20 @@ export default function MeetingsPage() {
           <h2 className="page-title" style={{ color: 'var(--text-primary)', fontSize: '36px', fontWeight: 700 }}>
             Meetings
           </h2>
-          
-          {/* Auto-sync status indicator */}
-          <div className="mt-2 flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <div className={`w-2 h-2 rounded-full ${isRunning ? 'bg-primary animate-pulse' : 'bg-muted-foreground/50'}`}></div>
-              <span className="text-sm text-muted-foreground">
-                {isRunning ? 'Auto-sync active' : 'Auto-sync inactive'}
-              </span>
-            </div>
-            
-            {lastSyncInfo && (
-              <div className="text-sm text-primary font-medium">
-                {lastSyncInfo}
-              </div>
-            )}
-          </div>
+          <p className="mt-2 text-sm" style={{ color: 'var(--text-secondary)' }}>
+            Updates via webhook. Use Refresh button to manually update.
+          </p>
         </div>
         <div className="mt-4 flex md:mt-0 md:ml-4 gap-3">
           <button
             onClick={forceSync}
             className="btn btn-outline inline-flex items-center px-3 py-2 text-sm"
-            title="Force immediate sync"
+            title="Manually refresh meetings"
           >
             <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
-            Sync Now
+            Refresh
           </button>
           <button
             onClick={() => setShowJoinModal(true)}

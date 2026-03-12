@@ -111,7 +111,10 @@ export async function apiRequest<T>(
 
     return await response.json();
   } catch (error) {
-    console.error('API Request Error:', error);
+    // Don't log expected authentication errors
+    if (!(error as any)?.isAuthError) {
+      console.error('API Request Error:', error);
+    }
     throw error;
   }
 }

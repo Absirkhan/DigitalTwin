@@ -19,10 +19,10 @@ import type {
 export const meetingService = {
   /**
    * Get all meetings for the current user
-   * GET /api/v1/meetings
+   * GET /api/v1/meetings/
    */
   getAll: async (): Promise<Meeting[]> => {
-    return get<Meeting[]>('/api/v1/meetings');
+    return get<Meeting[]>('/api/v1/meetings/');
   },
 
   /**
