@@ -34,3 +34,11 @@ torch>=2.0.0
 peft>=0.17.0
 accelerate>=1.0.0
 sentencepiece==0.1.99
+
+# RAG Module Dependencies (Ultra-low-latency retrieval system)
+faiss-cpu==1.7.4              # Facebook AI Similarity Search - CPU optimized
+sentence-transformers>=2.2.2  # Embedding model (all-MiniLM-L6-v2)
+tiktoken==0.5.2               # OpenAI's tokenizer for accurate token counting
+langdetect==1.0.9             # Language detection for user profiling
+nltk==3.8.1                   # Natural language processing (stopwords, tokenization)
+scikit-learn>=1.3.2           # Used by sentence-transformers for normalization

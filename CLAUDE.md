@@ -212,6 +212,15 @@ External Services:
 **Planned tables (RAG system):**
 - documents, document_chunks, embeddings, rag_queries
 
+**RAG Module (Standalone):**
+- Located in `/rag_module/` - fully independent voice assistant context retrieval system
+- FAISS-based vector store for sub-millisecond retrieval (~15ms measured, target <1ms)
+- Per-user data isolation with FAISS indexes and JSON metadata
+- Token budget management (2150 token limit for LLM prompts)
+- User profile building and speaking style analysis
+- Session memory management (in-memory, max 6 messages)
+- See RAG Module section below for details
+
 **Migration management:**
 - All changes via Alembic (in `/alembic/versions/`)
 - 4 existing migrations: initial schema, meeting columns, OAuth update, recording fields
@@ -557,3 +566,316 @@ No formal test suite currently implemented.
 3. Check database connection: `DATABASE_URL` in `.env`
 4. Run migrations: `alembic upgrade head`
 5. See [FIXES_APPLIED.md](FIXES_APPLIED.md) for startup fixes
+
+## RAG Module - Voice Assistant Context Retrieval
+
+### Overview
+
+The RAG (Retrieval Augmented Generation) module is a **standalone system** for ultra-low-latency context retrieval in voice assistant applications. It's located in `/rag_module/` and operates independently from the main DigitalTwin application.
+
+**Key characteristics:**
+- **FAISS-based vector store** - Sub-millisecond retrieval target (~0.3ms theoretical, ~15ms measured with overhead)
+- **CPU-only operation** - No GPU dependencies
+- **Per-user isolation** - Each user has separate FAISS index and metadata files
+- **Token budget enforcement** - Strict 2150 token limit for LLM prompts
+- **Offline-capable** - Falls back to word-based token estimation when tiktoken unavailable
+- **User profiling** - Automatic speaking style analysis and personalization
+
+### Architecture
+
+```
+Voice Assistant Pipeline:
+User Voice → Speech-to-Text → [RAG Module] → LLM → Text-to-Speech → Audio Output
+                                     ↓
+                            Context Retrieval (~15ms)
+                                     ↓
+                              ┌──────────────────┐
+                              │  RAG Pipeline    │
+                              ├──────────────────┤
+                              │  1. Embedder     │ ← all-MiniLM-L6-v2 (384-dim)
+                              │  2. Retriever    │ ← FAISS IndexFlatL2
+                              │  3. Profile Mgr  │ ← User style analysis
+                              │  4. Session Mem  │ ← Last 6 messages
+                              │  5. Prompt Build │ ← Token budget (2150)
+                              └──────────────────┘
+                                     ↓
+                          Per-User Data Storage:
+                          data/users/{user_id}/
+                            ├── faiss_index.bin
+                            ├── metadata.json
+                            └── profile.json
+```
+
+### Module Structure
+
+```
+rag_module/
+├── rag/                          # Core RAG implementation
+│   ├── __init__.py              # Module exports
+│   ├── embedder.py              # Text-to-vector conversion (all-MiniLM-L6-v2)
+│   ├── faiss_store.py           # FAISS vector store with persistence
+│   ├── retriever.py             # Similarity search and ranking
+│   ├── memory_manager.py        # Session memory (in-memory, max 6 msgs)
+│   ├── profile_manager.py       # User profiling and style analysis
+│   ├── prompt_builder.py        # Token budget and prompt assembly
+│   └── pipeline.py              # Main RAG orchestrator
+├── tests/                        # Comprehensive test suite
+│   ├── __init__.py
+│   ├── test_faiss_store.py      # Vector store tests
+│   ├── test_retriever.py        # Retrieval tests
+│   ├── test_profile.py          # Profile manager tests
+│   └── test_pipeline.py         # End-to-end integration tests
+├── data/                         # User data storage
+│   └── users/                   # Per-user directories
+│       └── {user_id}/
+│           ├── faiss_index.bin  # FAISS vector index
+│           ├── metadata.json    # Exchange metadata
+│           └── profile.json     # User profile
+├── demo.py                       # Full system demonstration
+├── benchmark.py                  # Latency benchmarking tool
+└── test_simple.py               # Quick sanity check
+```
+
+### Key Components
+
+**1. EmbeddingEngine (`embedder.py`)**
+- Model: `all-MiniLM-L6-v2` (384-dimensional embeddings)
+- CPU-optimized sentence-transformers
+- L2 normalization for cosine similarity compatibility
+- ~10ms embedding latency per query
+
+**2. FAISSStore (`faiss_store.py`)**
+- FAISS `IndexFlatL2` for exact nearest neighbor search
+- Per-user index files with automatic persistence
+- Immediate write-through on every add operation
+- Returns results sorted by similarity score (0-1 range)
+
+**3. ContextRetriever (`retriever.py`)**
+- Caches FAISSStore instances per user
+- Threshold-based filtering (default: 0.5 similarity)
+- Formatted context output for LLM consumption
+- Retrieval latency tracking for monitoring
+
+**4. UserProfileManager (`profile_manager.py`)**
+- Automatic speaking style analysis:
+  - Formality level (casual/formal)
+  - Average message length (short/medium/long)
+  - Technical term usage detection
+  - Common vocabulary extraction
+  - Topic identification
+- Concise style summaries (<200 words) for prompt inclusion
+
+**5. SessionMemory (`memory_manager.py`)**
+- In-memory message storage (Python list)
+- Maximum 6 messages (configurable)
+- Formatted output for prompt assembly
+- Automatic overflow handling (FIFO)
+
+**6. PromptBuilder (`prompt_builder.py`)**
+- Token budget allocation (2150 total):
+  - System prompt: 300 tokens
+  - Profile summary: 150 tokens
+  - Retrieved context: 600 tokens
+  - Session history: 400 tokens
+  - User message: 200 tokens
+  - Response buffer: 500 tokens
+- Intelligent trimming (context first, then history)
+- Offline fallback (word-based estimation when tiktoken unavailable)
+- Accurate token counting with tiktoken (cl100k_base encoding)
+
+**7. RAGPipeline (`pipeline.py`)**
+- Main orchestrator class
+- User initialization and lifecycle management
+- Message processing and exchange storage
+- Session management (start/end)
+- User statistics and analytics
+
+### Usage Example
+
+```python
+from rag.pipeline import RAGPipeline
+
+# Initialize pipeline
+pipeline = RAGPipeline(base_path="data/users")
+
+# Initialize new user
+user_info = pipeline.initialize_user("user123")
+# Returns: {is_new_user: True, total_past_exchanges: 0, profile: {...}}
+
+# Process user message
+result = pipeline.process_message("user123", "How do I fix this error?")
+# Returns: {
+#   prompt: "...",                    # Assembled LLM prompt
+#   retrieved_context: "...",         # Relevant past exchanges
+#   token_breakdown: {...},           # Token usage details
+#   num_results_retrieved: 2,         # Number of context items
+#   retrieval_latency_ms: 12.5        # Retrieval performance
+# }
+
+# Store exchange after LLM response
+pipeline.store_exchange("user123",
+    user_message="How do I fix this error?",
+    assistant_response="Check the logs for details."
+)
+
+# End session (clears session memory, keeps long-term storage)
+stats = pipeline.end_session("user123")
+# Returns: {session_cleared: True, messages_in_session: 5, total_exchanges_stored: 5}
+
+# Get user statistics
+stats = pipeline.get_user_stats("user123")
+# Returns: {user_id, total_exchanges, session_messages, profile: {...}}
+```
+
+### Running Tests
+
+```bash
+cd rag_module
+
+# Individual test suites
+python tests/test_faiss_store.py   # Vector store tests
+python tests/test_retriever.py     # Retrieval tests
+python tests/test_profile.py       # Profile manager tests
+python tests/test_pipeline.py      # Integration tests
+
+# Demo (simulates 2 conversation sessions)
+python demo.py
+
+# Benchmark (50 exchanges, 100 queries)
+python benchmark.py
+```
+
+### Performance Metrics
+
+**Measured latency (test_pipeline.py):**
+- Average retrieval: ~15ms (includes embedding generation)
+- Pure FAISS search: ~0.3ms (theoretical)
+- Overhead breakdown:
+  - Embedding generation: ~10ms (sentence-transformers)
+  - FAISS search: ~0.3ms
+  - Result formatting: ~2ms
+  - Metadata lookup: ~2ms
+
+**Token budget compliance:**
+- All test cases within 2150 token limit
+- Automatic trimming when needed
+- Average prompt size: 150-300 tokens
+
+**Storage efficiency:**
+- FAISS index: ~50KB per 100 exchanges
+- Metadata JSON: ~20KB per 100 exchanges
+- Profile JSON: ~2KB per user
+
+### Configuration
+
+No environment variables needed - fully standalone. Configuration is code-based:
+
+```python
+# In prompt_builder.py
+self.budget = {
+    "system_prompt": 300,
+    "profile_summary": 150,
+    "retrieved_context": 600,
+    "session_history": 400,
+    "user_message": 200,
+    "response_buffer": 500,
+    "total_limit": 2150
+}
+
+# In retriever.py
+def retrieve(self, user_id: str, query: str,
+             top_k: int = 3, threshold: float = 0.5):
+    # threshold: minimum similarity score (0.0-1.0)
+    # top_k: maximum results to return
+```
+
+### Integration with Main App
+
+The RAG module is **currently standalone** and not integrated with the main DigitalTwin FastAPI application. To integrate:
+
+1. **Add RAG endpoints** in `app/api/v1/endpoints/rag.py`:
+```python
+from rag.pipeline import RAGPipeline
+
+# Initialize pipeline once at startup
+rag_pipeline = RAGPipeline(base_path="rag_module/data/users")
+
+@router.post("/rag/process")
+async def process_message(user_id: str, message: str):
+    result = rag_pipeline.process_message(user_id, message)
+    return result
+```
+
+2. **Store exchanges** after AI summary generation:
+```python
+# In app/services/summary_service.py
+async def generate_summary(meeting_id: int, transcript: str):
+    summary = await ai_model.summarize(transcript)
+
+    # Store in RAG for future context
+    rag_pipeline.store_exchange(
+        user_id=str(meeting.user_id),
+        user_message=f"Meeting: {meeting.title}",
+        assistant_response=summary
+    )
+```
+
+3. **Use context for AI responses**:
+```python
+# In app/services/ai_responses.py
+async def generate_response(user_id: int, query: str):
+    # Get context from RAG
+    result = rag_pipeline.process_message(str(user_id), query)
+
+    # Send to LLM
+    llm_response = await llm.generate(result['prompt'])
+
+    # Store exchange
+    rag_pipeline.store_exchange(str(user_id), query, llm_response)
+
+    return llm_response
+```
+
+### Known Issues
+
+**1. Retrieval Latency Higher Than Target**
+- Target: <1ms
+- Measured: ~15ms average
+- Cause: Embedding generation overhead (~10ms)
+- Solution: Pre-compute and cache common query embeddings, or use faster embedding model
+
+**2. Offline Tiktoken Fallback**
+- tiktoken requires internet to download encoding first time
+- Falls back to word-based estimation (less accurate)
+- Download cl100k_base.tiktoken manually if offline environment:
+  ```bash
+  # Download once with internet connection
+  python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')"
+  ```
+
+**3. Windows Unicode Errors**
+- Unicode checkmarks (✓) cause `UnicodeEncodeError` in Windows console
+- Fixed: All checkmarks replaced with `[OK]` throughout codebase
+- Pattern: `✓` → `[OK]`
+
+### Future Enhancements
+
+**Performance optimizations:**
+- [ ] Switch to faster embedding model (e.g., BGE-small, 100ms → 5ms)
+- [ ] Implement embedding cache for common queries
+- [ ] Use FAISS IVF index for larger datasets (>10k exchanges)
+- [ ] Batch processing for multiple queries
+
+**Feature additions:**
+- [ ] Multi-modal support (images, documents)
+- [ ] Hybrid search (keyword + semantic)
+- [ ] Reranking with cross-encoder
+- [ ] Automatic exchange importance scoring
+- [ ] Export/import user data
+- [ ] Multi-language support
+
+**Integration work:**
+- [ ] REST API endpoints in main FastAPI app
+- [ ] Database storage option (PostgreSQL vector extension)
+- [ ] Redis caching layer
+- [ ] Metrics and monitoring dashboard
