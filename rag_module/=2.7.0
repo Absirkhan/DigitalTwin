@@ -1,0 +1,78 @@
+Requirement already satisfied: sentence-transformers in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (2.2.2)
+Collecting sentence-transformers
+  Downloading sentence_transformers-5.3.0-py3-none-any.whl.metadata (16 kB)
+Collecting transformers<6.0.0,>=4.41.0 (from sentence-transformers)
+  Downloading transformers-5.3.0-py3-none-any.whl.metadata (32 kB)
+Requirement already satisfied: huggingface-hub>=0.20.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from sentence-transformers) (0.36.2)
+Requirement already satisfied: torch>=1.11.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from sentence-transformers) (2.1.0+cu118)
+Requirement already satisfied: numpy in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from sentence-transformers) (1.24.3)
+Requirement already satisfied: scikit-learn in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from sentence-transformers) (1.3.2)
+Requirement already satisfied: scipy in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from sentence-transformers) (1.15.3)
+Requirement already satisfied: typing_extensions>=4.5.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from sentence-transformers) (4.15.0)
+Requirement already satisfied: tqdm in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from sentence-transformers) (4.67.1)
+Collecting huggingface-hub>=0.20.0 (from sentence-transformers)
+  Downloading huggingface_hub-1.7.1-py3-none-any.whl.metadata (13 kB)
+Requirement already satisfied: packaging>=20.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from transformers<6.0.0,>=4.41.0->sentence-transformers) (23.2)
+Requirement already satisfied: pyyaml>=5.1 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from transformers<6.0.0,>=4.41.0->sentence-transformers) (6.0.2)
+Requirement already satisfied: regex!=2019.12.17 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from transformers<6.0.0,>=4.41.0->sentence-transformers) (2025.9.1)
+Collecting tokenizers<=0.23.0,>=0.22.0 (from transformers<6.0.0,>=4.41.0->sentence-transformers)
+  Downloading tokenizers-0.22.2-cp39-abi3-win_amd64.whl.metadata (7.4 kB)
+Requirement already satisfied: typer in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from transformers<6.0.0,>=4.41.0->sentence-transformers) (0.21.1)
+Requirement already satisfied: safetensors>=0.4.3 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from transformers<6.0.0,>=4.41.0->sentence-transformers) (0.6.2)
+Requirement already satisfied: filelock>=3.10.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from huggingface-hub>=0.20.0->sentence-transformers) (3.19.1)
+Requirement already satisfied: fsspec>=2023.5.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from huggingface-hub>=0.20.0->sentence-transformers) (2025.9.0)
+Collecting hf-xet<2.0.0,>=1.4.2 (from huggingface-hub>=0.20.0->sentence-transformers)
+  Downloading hf_xet-1.4.2-cp37-abi3-win_amd64.whl.metadata (4.9 kB)
+Requirement already satisfied: httpx<1,>=0.23.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from huggingface-hub>=0.20.0->sentence-transformers) (0.25.2)
+Requirement already satisfied: anyio in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub>=0.20.0->sentence-transformers) (3.7.1)
+Requirement already satisfied: certifi in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub>=0.20.0->sentence-transformers) (2025.8.3)
+Requirement already satisfied: httpcore==1.* in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub>=0.20.0->sentence-transformers) (1.0.9)
+Requirement already satisfied: idna in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub>=0.20.0->sentence-transformers) (3.10)
+Requirement already satisfied: sniffio in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from httpx<1,>=0.23.0->huggingface-hub>=0.20.0->sentence-transformers) (1.3.1)
+Requirement already satisfied: h11>=0.16 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from httpcore==1.*->httpx<1,>=0.23.0->huggingface-hub>=0.20.0->sentence-transformers) (0.16.0)
+Requirement already satisfied: sympy in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from torch>=1.11.0->sentence-transformers) (1.14.0)
+Requirement already satisfied: networkx in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from torch>=1.11.0->sentence-transformers) (3.5)
+Requirement already satisfied: jinja2 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from torch>=1.11.0->sentence-transformers) (3.1.2)
+Requirement already satisfied: colorama in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from tqdm->sentence-transformers) (0.4.6)
+Requirement already satisfied: MarkupSafe>=2.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from jinja2->torch>=1.11.0->sentence-transformers) (2.1.5)
+Requirement already satisfied: joblib>=1.1.1 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from scikit-learn->sentence-transformers) (1.5.2)
+Requirement already satisfied: threadpoolctl>=2.0.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from scikit-learn->sentence-transformers) (3.6.0)
+Requirement already satisfied: mpmath<1.4,>=1.1.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from sympy->torch>=1.11.0->sentence-transformers) (1.3.0)
+Requirement already satisfied: click>=8.0.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from typer->transformers<6.0.0,>=4.41.0->sentence-transformers) (8.2.1)
+Requirement already satisfied: shellingham>=1.3.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from typer->transformers<6.0.0,>=4.41.0->sentence-transformers) (1.5.4)
+Requirement already satisfied: rich>=10.11.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from typer->transformers<6.0.0,>=4.41.0->sentence-transformers) (14.3.2)
+Requirement already satisfied: markdown-it-py>=2.2.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from rich>=10.11.0->typer->transformers<6.0.0,>=4.41.0->sentence-transformers) (4.0.0)
+Requirement already satisfied: pygments<3.0.0,>=2.13.0 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from rich>=10.11.0->typer->transformers<6.0.0,>=4.41.0->sentence-transformers) (2.19.2)
+Requirement already satisfied: mdurl~=0.1 in C:\Users\absir\AppData\Local\Programs\Python\Python311\Lib\site-packages (from markdown-it-py>=2.2.0->rich>=10.11.0->typer->transformers<6.0.0,>=4.41.0->sentence-transformers) (0.1.2)
+Downloading sentence_transformers-5.3.0-py3-none-any.whl (512 kB)
+Downloading transformers-5.3.0-py3-none-any.whl (10.7 MB)
+   ---------------------------------------- 10.7/10.7 MB 3.3 MB/s  0:00:03
+Downloading huggingface_hub-1.7.1-py3-none-any.whl (616 kB)
+   ---------------------------------------- 616.3/616.3 kB 3.8 MB/s  0:00:00
+Downloading hf_xet-1.4.2-cp37-abi3-win_amd64.whl (3.7 MB)
+   ---------------------------------------- 3.7/3.7 MB 2.1 MB/s  0:00:01
+Downloading tokenizers-0.22.2-cp39-abi3-win_amd64.whl (2.7 MB)
+   ---------------------------------------- 2.7/2.7 MB 5.0 MB/s  0:00:00
+Installing collected packages: hf-xet, huggingface-hub, tokenizers, transformers, sentence-transformers
+  Attempting uninstall: hf-xet
+    Found existing installation: hf-xet 1.2.0
+    Uninstalling hf-xet-1.2.0:
+      Successfully uninstalled hf-xet-1.2.0
+  Attempting uninstall: huggingface-hub
+    Found existing installation: huggingface_hub 0.36.2
+    Uninstalling huggingface_hub-0.36.2:
+      Successfully uninstalled huggingface_hub-0.36.2
+  Attempting uninstall: tokenizers
+    Found existing installation: tokenizers 0.15.2
+    Uninstalling tokenizers-0.15.2:
+      Successfully uninstalled tokenizers-0.15.2
+  Attempting uninstall: transformers
+    Found existing installation: transformers 4.35.2
+    Uninstalling transformers-4.35.2:
+      Successfully uninstalled transformers-4.35.2
+  Attempting uninstall: sentence-transformers
+    Found existing installation: sentence-transformers 2.2.2
+    Uninstalling sentence-transformers-2.2.2:
+      Successfully uninstalled sentence-transformers-2.2.2
+
+Successfully installed hf-xet-1.4.2 huggingface-hub-1.7.1 sentence-transformers-5.3.0 tokenizers-0.22.2 transformers-4.57.6

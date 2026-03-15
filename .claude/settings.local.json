@@ -7,7 +7,12 @@
       "Bash(redis-cli.bat ping:*)",
       "Bash(cmd /c redis-cli.bat ping)",
       "Bash(timeout 10 python:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(pip uninstall:*)",
+      "Bash(timeout 300 python:*)",
+      "Bash(more:*)",
+      "Bash(timeout 5 echo:*)"
     ],
     "deny": [],
     "ask": []
