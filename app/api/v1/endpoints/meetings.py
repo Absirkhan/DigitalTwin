@@ -2,7 +2,7 @@
 Meeting management endpoints
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import datetime
@@ -845,6 +845,125 @@ async def join_meeting_with_url(
             bot_name=request.bot_name,
             error_details={"error_type": type(e).__name__, "error_message": str(e)}
         )
+
+
+@router.post("/bot/speak")
+async def make_bot_speak(
+    audio_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user_bearer),
+    db: Session = Depends(get_db),
+):
+    """Upload an MP3 and inject it to the currently active bot for the authenticated user."""
+    filename = audio_file.filename or "unknown.mp3"
+    content_type = audio_file.content_type or "application/octet-stream"
+
+    logging.info(
+        "Received bot speak request",
+        extra={
+            "user_id": current_user.id,
+            "filename": filename,
+            "content_type": content_type,
+        },
+    )
+
+    is_mp3_name = filename.lower().endswith(".mp3")
+    is_mp3_content = content_type in ("audio/mpeg", "audio/mp3", "application/octet-stream")
+    if not is_mp3_name and not is_mp3_content:
+        raise HTTPException(status_code=400, detail="Only MP3 files are supported")
+
+    audio_bytes = await audio_file.read()
+    audio_size = len(audio_bytes)
+    if audio_size == 0:
+        raise HTTPException(status_code=400, detail="Uploaded audio file is empty")
+
+    # Find the currently active bot first (meeting in progress/joining/processing).
+    active_statuses = {"joining", "in_progress", "processing"}
+    user_bots = (
+        db.query(Bot)
+        .filter(Bot.user_id == current_user.id)
+        .order_by(Bot.created_at.desc())
+        .all()
+    )
+
+    if not user_bots:
+        raise HTTPException(status_code=404, detail="No bots found for current user")
+
+    selected_bot = None
+    selected_meeting = None
+
+    for bot in user_bots:
+        if not bot.meeting_id:
+            continue
+
+        meeting = db.query(Meeting).filter(Meeting.id == bot.meeting_id).first()
+        if meeting and meeting.status in active_statuses:
+            selected_bot = bot
+            selected_meeting = meeting
+            break
+
+    # Fallback: most recently created bot if no active meeting-linked bot is found.
+    if selected_bot is None:
+        selected_bot = user_bots[0]
+        if selected_bot.meeting_id:
+            selected_meeting = db.query(Meeting).filter(Meeting.id == selected_bot.meeting_id).first()
+        logging.warning(
+            "No active meeting-linked bot found; falling back to latest bot",
+            extra={"user_id": current_user.id, "fallback_bot_id": selected_bot.bot_id},
+        )
+
+    logging.info(
+        "Injecting audio to bot",
+        extra={
+            "user_id": current_user.id,
+            "bot_id": selected_bot.bot_id,
+            "meeting_id": selected_meeting.id if selected_meeting else None,
+            "meeting_status": selected_meeting.status if selected_meeting else None,
+            "audio_size_bytes": audio_size,
+        },
+    )
+
+    recall_result = await recall_service.inject_output_audio_mp3(
+        bot_id=selected_bot.bot_id,
+        audio_bytes=audio_bytes,
+    )
+
+    if not recall_result.get("success"):
+        logging.error(
+            "Failed to inject audio to bot",
+            extra={
+                "user_id": current_user.id,
+                "bot_id": selected_bot.bot_id,
+                "recall_error": recall_result,
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": "Recall API failed to inject audio",
+                "bot_id": selected_bot.bot_id,
+                "recall_result": recall_result,
+            },
+        )
+
+    logging.info(
+        "Bot speak request completed successfully",
+        extra={
+            "user_id": current_user.id,
+            "bot_id": selected_bot.bot_id,
+            "meeting_id": selected_meeting.id if selected_meeting else None,
+        },
+    )
+
+    return {
+        "success": True,
+        "message": "Audio injected. Bot should speak in the meeting shortly.",
+        "bot_id": selected_bot.bot_id,
+        "meeting_id": selected_meeting.id if selected_meeting else None,
+        "meeting_status": selected_meeting.status if selected_meeting else None,
+        "filename": filename,
+        "audio_size_bytes": audio_size,
+        "recall_response": recall_result.get("data", {}),
+    }
 
 
 @router.post("/transcript", response_model=MeetingTranscriptResponse)
