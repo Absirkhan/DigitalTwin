@@ -11,6 +11,7 @@ DigitalTwin is an intelligent meeting automation platform built as a Final Year 
 - 📝 **Meeting Transcriptions** - Real-time transcript generation and formatting
 - ⚡ **Real-Time WebSocket Transcription** - Live transcript streaming with <100ms latency
 - 🧠 **AI Summarization** - Custom fine-tuned FLAN-T5 model for meeting summaries
+- 🎤 **Voice Cloning & TTS** - Neural voice cloning with NeuTTS Nano for personalized bot responses
 - 📅 **Google Calendar Integration** - OAuth-based calendar synchronization
 - 🔐 **Secure Authentication** - Google OAuth 2.0 implementation
 - 🗄️ **Database Management** - PostgreSQL with comprehensive schema
@@ -82,6 +83,8 @@ DigitalTwin/
 │   │           ├── auth.py       # Authentication endpoints
 │   │           ├── calendar.py   # Calendar management
 │   │           ├── meetings.py   # Meeting operations
+│   │           ├── realtime.py   # Real-time transcription WebSocket
+│   │           ├── tts.py        # TTS voice cloning endpoints
 │   │           ├── users.py      # User management
 │   │           └── voice.py      # Voice processing
 │   ├── core/                     # Core application components
@@ -112,10 +115,15 @@ DigitalTwin/
 │       ├── meeting_automation.py # Automated meeting handling
 │       ├── recall_service.py    # Recall.ai integration
 │       ├── recording_service.py # Video recording management
+│       ├── redis_pubsub.py      # Redis pub/sub for real-time features
 │       ├── summary_service.py   # AI summarization
+│       ├── tts_cache.py         # TTS Redis caching (<50ms responses)
+│       ├── tts_service.py       # NeuTTS Nano voice cloning service
+│       ├── tts_tasks.py         # Celery async TTS synthesis
 │       ├── user.py              # User management
 │       ├── voice.py             # Voice processing
-│       └── voice_processing.py  # Audio processing
+│       ├── voice_processing.py  # Audio processing
+│       └── websocket_manager.py # WebSocket connection manager
 ├── alembic/                      # Database migrations
 │   ├── env.py                   # Migration environment
 │   ├── script.py.mako           # Migration template
@@ -123,8 +131,14 @@ DigitalTwin/
 │       ├── 001_initial_schema.py
 │       ├── 002_add_missing_meeting_columns.py
 │       ├── 003_update_user_oauth.py
-│       └── 004_add_recording_fields.py
+│       ├── 004_add_recording_fields.py
+│       └── f8a52e412ae7_add_has_voice_profile_to_users.py
 ├── data/                         # Data storage
+│   ├── voice_profiles/          # User voice profiles
+│   │   └── {user_id}/
+│   │       ├── ref_codes.pt     # Voice encoding (PyTorch tensor)
+│   │       ├── ref_text.txt     # Reference transcript
+│   │       └── ref_audio.wav    # Original recording
 │   └── vectordb/                # Vector database files
 ├── logs/                         # Application logs
 ├── models/                       # AI model files
@@ -176,7 +190,8 @@ DigitalTwin/
 
 - Python 3.11+
 - PostgreSQL 12+
-- Redis 5.0+ (required for real-time transcription)
+- Redis 5.0+ (required for real-time transcription and TTS caching)
+- eSpeak NG 1.52.0+ (required for TTS voice cloning)
 - Google Cloud Console account (for OAuth and Calendar APIs)
 - Recall.ai API account (for meeting bots and recording)
 
@@ -252,7 +267,60 @@ Or use the wrapper script provided in the project:
 
 See [REDIS_SETUP_WINDOWS.md](REDIS_SETUP_WINDOWS.md) for detailed Windows installation troubleshooting.
 
-### 4. Environment Setup
+### 4. eSpeak NG Installation (Required for TTS Voice Cloning)
+
+NeuTTS Nano requires **eSpeak NG 1.52.0+** for phonemization (text-to-phoneme conversion).
+
+**Windows:**
+1. Download eSpeak NG from: https://github.com/espeak-ng/espeak-ng/releases
+2. Download and run the installer (e.g., `espeak-ng-X64.msi`)
+3. Default installation path: `C:\Program Files\eSpeak NG`
+4. The TTS service auto-detects the installation if installed at default location
+
+**Verify installation:**
+```bash
+& "C:\Program Files\eSpeak NG\espeak-ng.exe" --version
+# Expected: eSpeak NG text-to-speech: 1.52.0 or higher
+```
+
+**Mac:**
+```bash
+brew install espeak-ng
+espeak-ng --version
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+sudo apt update
+sudo apt install espeak-ng
+espeak-ng --version
+```
+
+**Note:** Environment variables `PHONEMIZER_ESPEAK_LIBRARY` and `PHONEMIZER_ESPEAK_PATH` can be set if eSpeak NG is installed in a non-standard location. See [SETUP_TTS.md](SETUP_TTS.md) for details.
+
+### 5. NeuTTS Nano Installation (Voice Cloning Model)
+
+NeuTTS Nano must be installed **manually from source** (not on PyPI):
+
+```bash
+# Clone the NeuTTS repository
+git clone https://github.com/neuphonic/neutts.git
+
+# Install in editable mode
+pip install -e ./neutts
+
+# Install llama-cpp-python (required for GGUF model support)
+pip install llama-cpp-python
+```
+
+**Verify installation:**
+```bash
+python -c "from neutts import NeuTTS; print('NeuTTS installed successfully')"
+```
+
+See [SETUP_TTS.md](SETUP_TTS.md) for complete installation instructions and troubleshooting.
+
+### 6. Environment Setup
 
 Configure your `.env` file with required API keys and database connection:
 
@@ -293,7 +361,24 @@ SECRET_KEY=your-super-secret-key-here
 2. Get API key from dashboard
 3. Add to environment configuration
 
-### 6. Start the Application
+### 7. Background Task Worker (Celery)
+
+The system uses Celery for async background tasks (TTS synthesis, meeting automation, etc.):
+
+```bash
+# Windows users MUST use --pool=solo to avoid multiprocessing issues
+celery -A app.core.celery worker --loglevel=info --pool=solo
+
+# Linux/Mac users can omit --pool=solo
+celery -A app.core.celery worker --loglevel=info
+```
+
+**Why Celery?** Without Celery, TTS synthesis blocks the UI for 2-3 seconds. With Celery:
+- API responds instantly with job ID
+- UI remains responsive while synthesis runs in background
+- User gets progress updates via polling
+
+### 8. Start the Application
 
 ```bash
 uvicorn app.main:app --reload
@@ -303,6 +388,8 @@ uvicorn app.main:app --reload
 ```
 ✅ Database initialized
 ✅ Redis pub/sub service initialized
+🔥 Pre-warming TTS model...
+✅ TTS model pre-warmed and ready (eliminates first-request delay)
 ✅ DigitalTwin application started successfully!
 📡 Real-time transcription webhook: http://localhost:8000/api/v1/realtime/webhook/recall
 🔌 WebSocket endpoint: ws://localhost:8000/api/v1/realtime/ws/transcript/{meeting_id}
@@ -446,7 +533,200 @@ python tests/test_pipeline.py  # Integration tests
 
 **Note:** Currently standalone - integration with main FastAPI app planned for future release.
 
-### 6. Google Calendar Integration
+### 6. Voice Cloning and TTS (Text-to-Speech)
+
+The TTS system provides neural voice cloning capabilities using **NeuTTS Nano** with Q4 GGUF quantization for fast CPU-based inference. Users can record their voice once and generate unlimited personalized speech synthesis for their meeting bot.
+
+**Key Files:**
+- `app/services/tts_service.py` - NeuTTS Nano service (voice encoding, synthesis)
+- `app/services/tts_cache.py` - Redis caching for <50ms responses
+- `app/services/tts_tasks.py` - Celery background jobs for async synthesis
+- `app/api/v1/endpoints/tts.py` - TTS API endpoints
+- `frontend/web_gui/app/components/VoiceSetup.tsx` - Voice recording and preview UI
+
+**Technology Stack:**
+- **Model**: NeuTTS Nano Q4 GGUF (~200MB backbone, ~50MB codec)
+- **Phonemizer**: eSpeak NG 1.52.0+ for text-to-phoneme conversion
+- **Caching**: Redis with 24-hour TTL for repeated phrases
+- **Background Jobs**: Celery for non-blocking synthesis
+- **Audio Format**: 24kHz WAV output
+
+**Features:**
+- **Voice Recording** - Record 15-second voice samples via browser microphone
+- **Voice Preview** - Test how your bot will sound with custom dialogue (50-word limit)
+- **Original Recording Playback** - Hear your submitted voice sample
+- **Redis Caching** - Instant responses (<50ms) for repeated phrases (40-60x faster)
+- **Async Synthesis** - Non-blocking UI with background job processing
+- **Model Pre-warming** - Eliminates 30-second first-request delay
+
+**Performance Optimizations:**
+
+1. **Model Pre-warming on Startup** (Tier 1)
+   - Loads TTS model during app initialization
+   - Eliminates 30s first-request delay
+   - Users get consistent 2-3s synthesis time from first request
+   - Configured in [app/main.py:62-72](app/main.py)
+
+2. **Redis Caching** (Tier 1)
+   - Sub-50ms response for cached phrases
+   - 40-60x faster than synthesis (2-3s → <50ms)
+   - 24-hour TTL with automatic cache management
+   - Implemented in [app/services/tts_cache.py](app/services/tts_cache.py)
+
+3. **Celery Async Jobs** (Tier 2)
+   - Instant API response (<100ms) with job ID
+   - Non-blocking UI - users can continue working
+   - Frontend polls for completion every 500ms
+   - Implemented in [app/services/tts_tasks.py](app/services/tts_tasks.py)
+
+4. **50-Word Limit** (Tier 1)
+   - Frontend enforces max 50 words for preview
+   - Predictable synthesis time (~2-3 seconds)
+   - Word counter with real-time validation
+   - Configured in [VoiceSetup.tsx:285-290](frontend/web_gui/app/components/VoiceSetup.tsx)
+
+5. **Loading Indicators** (Tier 1)
+   - Live timer showing elapsed time
+   - Estimated completion time display
+   - Visual feedback during synthesis
+   - Cache hit/miss indicators
+
+**Voice Profile Workflow:**
+
+```
+1. User Records Voice (Profile Page)
+   ↓
+2. 15-second audio + transcript uploaded
+   ↓
+3. Backend encodes voice with NeuTTS Nano
+   ↓
+4. Voice profile saved to data/voice_profiles/{user_id}/
+   ↓
+5. User tests preview with custom text (50-word limit)
+   ↓
+6. Synthesis job submitted to Celery queue
+   ↓
+7. Check Redis cache (if cached: instant response)
+   ↓
+8. If not cached: synthesize + store in cache
+   ↓
+9. Frontend polls job status every 500ms
+   ↓
+10. Audio delivered to user (<50ms cached, 2-3s uncached)
+```
+
+**API Endpoints:**
+
+```bash
+# Check if user has voice profile
+GET /api/v1/tts/voice-status
+Response: {"has_voice_profile": true}
+
+# Get detailed voice info with cache stats
+GET /api/v1/tts/voice-info
+Response: {
+  "has_voice_profile": true,
+  "has_original_recording": true,
+  "reference_text": "My name is...",
+  "cache_stats": {"total": 15, "hits": 12, "misses": 3}
+}
+
+# Upload voice sample (15-second recording + transcript)
+POST /api/v1/tts/upload-voice
+Body: FormData {audio_file: Blob, ref_text: string}
+Response: {"success": true, "message": "Voice profile saved"}
+
+# Get original recording (playback)
+GET /api/v1/tts/original-recording
+Response: audio/wav binary
+
+# Synthesize speech (async, non-blocking)
+POST /api/v1/tts/synthesize-async
+Body: FormData {text: string}
+Response: {"job_id": "abc123", "status": "queued"}
+
+# Poll job status
+GET /api/v1/tts/job/{job_id}
+Response: {
+  "status": "success",
+  "audio_data": "base64...",  # Base64-encoded WAV
+  "cache_hit": false,
+  "synthesis_time": 2.3
+}
+
+# Delete voice profile
+DELETE /api/v1/tts/voice
+Response: {"success": true, "message": "Voice profile deleted"}
+
+# Legacy sync endpoint (blocking, not recommended)
+POST /api/v1/tts/synthesize
+Body: FormData {text: string}
+Response: audio/wav binary (blocks for 2-3s)
+```
+
+**Performance Metrics:**
+
+| Scenario | Latency | Notes |
+|----------|---------|-------|
+| First request (cold start) | 30s → 2-3s | Pre-warming eliminates delay |
+| Uncached synthesis (50 words) | 2-3s | CPU inference (no GPU needed) |
+| Cached phrase | <50ms | 40-60x faster than synthesis |
+| Async job submission | <100ms | Instant API response, non-blocking |
+| Frontend polling interval | 500ms | Checks job status every 0.5s |
+
+**Celery Configuration (Windows):**
+
+```bash
+# Windows requires --pool=solo to avoid multiprocessing issues
+celery -A app.core.celery worker --loglevel=info --pool=solo
+
+# Configured in app/core/celery.py with:
+worker_pool='solo'       # Single-threaded but stable
+worker_concurrency=1     # One task at a time
+```
+
+**Why Celery for TTS?**
+
+Without Celery:
+- User clicks "Generate Voice" → UI freezes for 2-3 seconds → Audio plays
+- Poor UX for multiple previews
+
+With Celery:
+- User clicks "Generate Voice" → Instant response → UI remains responsive → Audio plays when ready
+- User can continue working while synthesis runs in background
+
+**Testing:**
+
+```bash
+# 1. Check Redis connection
+redis-cli ping  # Should return PONG
+
+# 2. Start Celery worker
+celery -A app.core.celery worker --loglevel=info --pool=solo
+
+# 3. Start FastAPI backend
+uvicorn app.main:app --reload
+
+# 4. Test via Swagger UI (http://localhost:8000/docs)
+# - Upload voice sample: POST /tts/upload-voice
+# - Get voice info: GET /tts/voice-info
+# - Async synthesis: POST /tts/synthesize-async
+# - Poll job: GET /tts/job/{job_id}
+# - Get original: GET /tts/original-recording
+
+# 5. Test via Frontend
+# - Navigate to Profile page
+# - Record voice or upload audio file
+# - Enter preview text (max 50 words)
+# - Click "Generate Voice Preview"
+# - Observe loading timer and cache status
+```
+
+**Documentation:**
+- [SETUP_TTS.md](SETUP_TTS.md) - Complete installation guide (510 lines)
+- [TTS_LATENCY_OPTIMIZATIONS.md](TTS_LATENCY_OPTIMIZATIONS.md) - Performance guide with benchmarks
+
+### 7. Google Calendar Integration
 
 Automatic meeting detection and synchronization with Google Calendar.
 
@@ -461,12 +741,12 @@ Automatic meeting detection and synchronization with Google Calendar.
 - `app/models/calendar_event.py` - Calendar event storage
 - `app/api/v1/endpoints/calendar.py` - Calendar API endpoints
 
-### 7. Database Schema & Management
+### 8. Database Schema & Management
 
 Comprehensive PostgreSQL database design supporting all system features.
 
 **Implementation:**
-- User management with OAuth token storage
+- User management with OAuth token storage and voice profile flags
 - Meeting lifecycle tracking
 - Bot status and recording metadata
 - Calendar event synchronization
@@ -476,6 +756,10 @@ Comprehensive PostgreSQL database design supporting all system features.
 - `alembic/versions/` - Database migration history
 - `app/models/` - SQLAlchemy database models
 - `DATABASE_SCHEMA.md` - Complete schema documentation
+
+**Recent Schema Changes:**
+- Added `has_voice_profile` boolean field to `users` table (tracks TTS voice profile status)
+- Migration: `alembic/versions/f8a52e412ae7_add_has_voice_profile_to_users.py`
 
 ## 🗄️ Current Database Schema
 
@@ -535,13 +819,26 @@ GET  /api/v1/calendar/events      # List calendar events
 POST /api/v1/calendar/sync        # Sync with Google Calendar
 ```
 
+### Voice Cloning & TTS APIs
+```
+GET    /api/v1/tts/voice-status         # Check if user has voice profile
+GET    /api/v1/tts/voice-info           # Get voice info with cache stats
+POST   /api/v1/tts/upload-voice         # Upload voice sample (15s audio + transcript)
+GET    /api/v1/tts/original-recording   # Get original recording
+POST   /api/v1/tts/synthesize-async     # Async synthesis (non-blocking)
+GET    /api/v1/tts/job/{job_id}         # Poll job status
+DELETE /api/v1/tts/voice                # Delete voice profile
+POST   /api/v1/tts/synthesize           # Legacy sync synthesis (blocking)
+```
+
 *Complete API documentation available at: http://localhost:8000/docs*
 
 ## 🔄 Background Tasks
 
-The system uses Celery for background task processing.
+The system uses Celery for background task processing with Redis as message broker and result backend.
 
 **Key Tasks:**
+- **TTS Voice Synthesis** - Async speech generation (2-3s per request)
 - Meeting monitoring and auto-joining
 - Transcript processing
 - AI summarization
@@ -556,8 +853,27 @@ from celery import Celery
 celery_app = Celery(
     "digitaltwin",
     broker="redis://localhost:6379/0",
-    backend="redis://localhost:6379/0"
+    backend="redis://localhost:6379/0",
+    include=[
+        "app.services.meeting_automation",
+        "app.services.voice_processing",
+        "app.services.ai_responses",
+        "app.services.tts_tasks"  # TTS async synthesis
+    ]
 )
+
+# Windows-specific configuration (avoids multiprocessing issues)
+worker_pool='solo'        # Single-threaded pool
+worker_concurrency=1      # One task at a time
+```
+
+**Starting Celery Worker:**
+```bash
+# Windows (REQUIRED: use --pool=solo)
+celery -A app.core.celery worker --loglevel=info --pool=solo
+
+# Linux/Mac (--pool=solo optional)
+celery -A app.core.celery worker --loglevel=info
 ```
 
 ## 🎯 Project Achievements
@@ -577,9 +893,12 @@ celery_app = Celery(
 - ✅ Video recording and storage
 - ✅ Real-time transcription processing
 - ✅ AI-powered meeting summarization
+- ✅ Neural voice cloning with TTS (NeuTTS Nano)
 - ✅ Calendar integration and synchronization
 - ✅ RAG module for voice assistant context retrieval
 - ✅ Comprehensive API documentation
+- ✅ Background task processing with Celery
+- ✅ Redis caching for performance optimization
 
 ### Security & Data Management
 - **Secure authentication** using Google OAuth 2.0

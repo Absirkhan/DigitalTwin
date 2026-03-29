@@ -19,6 +19,7 @@ class UserResponse(BaseModel):
     bot_name: Optional[str] = None
     profile_picture: Optional[str] = None
     is_active: bool
+    has_voice_profile: bool = False
 
     class Config:
         from_attributes = True
@@ -37,6 +38,7 @@ class DigitalTwinProfileResponse(BaseModel):
     profile_picture: Optional[str] = None
     full_name: Optional[str] = None
     email: str
+    has_voice_profile: bool = False
 
     class Config:
         from_attributes = True

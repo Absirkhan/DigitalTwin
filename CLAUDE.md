@@ -33,7 +33,10 @@ uvicorn app.main:app --reload                     # http://localhost:8000
 uvicorn app.main:app --reload --port 8001         # Custom port
 
 # Background task worker (Celery)
-celery -A app.core.celery worker --loglevel=info  # Required for async tasks
+# Windows (use solo pool to avoid multiprocessing issues)
+celery -A app.core.celery worker --loglevel=info --pool=solo
+# Linux/Mac (use prefork for better concurrency)
+celery -A app.core.celery worker --loglevel=info
 
 # Utility scripts
 python scripts/init_db.py                         # Initialize database
@@ -165,6 +168,7 @@ External Services:
 - `summarization.py` - AI summary generation endpoints
 - `users.py` - User profile management
 - `realtime.py` - **Real-time transcription** WebSocket and webhook endpoints
+- `tts.py` - **Voice cloning and TTS** endpoints with caching and async synthesis
 
 **Service Layer (`app/services/`):**
 - `recall_service.py` (65KB) - **Most critical service** - Recall.ai bot management, recording, transcription, webhook handling
@@ -175,6 +179,9 @@ External Services:
 - `calendar.py` - Google Calendar integration
 - `meeting.py` - Meeting business logic
 - `meeting_automation.py` - Auto-join scheduling logic
+- `tts_service.py` - **NeuTTS Nano voice cloning** with model pre-warming
+- `tts_cache.py` - **Redis caching for TTS** responses (<50ms cache hits)
+- `tts_tasks.py` - **Celery background tasks** for async TTS synthesis
 
 **Data Layer:**
 - `app/models/` - SQLAlchemy ORM models (user, meeting, bot, calendar_event, email)
@@ -197,13 +204,14 @@ External Services:
 **UI Components:**
 - `app/components/` - Reusable UI components
 - `app/components/RealtimeTranscript.tsx` - **Real-time transcript viewer** with WebSocket connection
+- `app/components/VoiceSetup.tsx` - **Voice profile management** with recording, preview, and caching
 - `app/contexts/` - React context providers (theme, auth)
 - `app/styles/` - CSS modules and Tailwind utilities
 
 ## Database Schema
 
 **Core tables (implemented):**
-1. **users** - OAuth tokens, profile, `bot_name` (custom name for meeting bot), `enable_backend_tasks`
+1. **users** - OAuth tokens, profile, `bot_name` (custom name for meeting bot), `enable_backend_tasks`, `has_voice_profile` (TTS)
 2. **meetings** - Full lifecycle tracking, `transcript` (text), `summary` (text), `action_items` (JSON array)
 3. **bots** - Recall.ai bot status, `recording_url`, `video_url`, `meeting_id` FK
 4. **calendar_events** - Google Calendar sync, meeting URL extraction
@@ -304,6 +312,88 @@ GET /api/v1/realtime/status/{meeting_id}
 ```
 
 See [REALTIME_TRANSCRIPTION.md](REALTIME_TRANSCRIPTION.md) for complete setup guide.
+
+### Voice Cloning and TTS (Text-to-Speech)
+
+**Technology**: NeuTTS Nano with Q4 GGUF quantization for CPU inference
+
+**Architecture**: Voice profile → Redis cache → Celery async jobs → Synthesized speech
+
+**Prerequisites:**
+1. eSpeak NG installed (phonemization - see [SETUP_TTS.md](SETUP_TTS.md))
+2. NeuTTS installed: `git clone https://github.com/neuphonic/neutts.git && pip install -e ./neutts`
+3. Redis running (for caching)
+4. Celery worker running (for async synthesis)
+
+**Workflow:**
+1. User records 15-second voice sample on profile page
+2. NeuTTS encodes voice → saves to `data/voice_profiles/{user_id}/`
+3. User generates preview with custom text
+4. System checks Redis cache first (instant if cached)
+5. If not cached → Celery async job synthesizes speech
+6. Frontend polls for completion → auto-plays when ready
+
+**Performance Optimizations:**
+- **Model pre-warming on startup** - Eliminates 30s first-request delay
+- **Redis caching** - <50ms response for repeated phrases (40-60x faster)
+- **Celery async jobs** - Non-blocking UI, instant API response
+- **50-word limit** - Optimal synthesis time (2-3s max)
+- **Job polling** - Real-time progress tracking
+
+**Expected Latency:**
+- First request (after pre-warm): 2-3 seconds
+- Cached phrases: <50ms (instant)
+- Average with 40% cache hit rate: ~1.2 seconds
+
+**Key Files:**
+- Backend: [app/services/tts_service.py](app/services/tts_service.py), [app/services/tts_cache.py](app/services/tts_cache.py), [app/services/tts_tasks.py](app/services/tts_tasks.py)
+- API: [app/api/v1/endpoints/tts.py](app/api/v1/endpoints/tts.py)
+- Frontend: [app/components/VoiceSetup.tsx](app/components/VoiceSetup.tsx), [lib/api/tts.ts](lib/api/tts.ts)
+
+**Endpoints:**
+- `POST /api/v1/tts/upload-voice` - Upload voice sample
+- `GET /api/v1/tts/voice-status` - Check if user has voice profile
+- `GET /api/v1/tts/voice-info` - Get profile info + cache stats
+- `GET /api/v1/tts/original-recording` - Download original voice sample
+- `POST /api/v1/tts/synthesize` - Sync synthesis (with cache)
+- `POST /api/v1/tts/synthesize-async` - Async synthesis (returns job_id)
+- `GET /api/v1/tts/job/{job_id}` - Poll job status
+- `DELETE /api/v1/tts/voice` - Delete voice profile
+
+**Celery Worker (Windows):**
+```bash
+celery -A app.core.celery worker --loglevel=info --pool=solo
+```
+
+**Why `--pool=solo` on Windows:**
+- Windows has multiprocessing issues with default `prefork` pool
+- `solo` pool = single-threaded, stable, no permission errors
+- Still non-blocking for users (main benefit preserved)
+- For production on Linux, use `prefork` or `gevent`
+
+**Testing:**
+```bash
+# Upload voice
+POST /api/v1/tts/upload-voice
+  - audio_file: voice_sample.wav
+  - ref_text: "My name is John..."
+
+# Generate preview (async)
+POST /api/v1/tts/synthesize-async
+  - text: "Hello everyone"
+  → Returns: {"job_id": "abc123", "status": "queued"}
+
+# Poll for result
+GET /api/v1/tts/job/abc123
+  → Returns: {"status": "success", "result": {"audio_data": "base64..."}}
+
+# Generate again (cache hit)
+POST /api/v1/tts/synthesize-async
+  - text: "Hello everyone"
+  → Returns instant (<50ms)
+```
+
+See [SETUP_TTS.md](SETUP_TTS.md) and [TTS_LATENCY_OPTIMIZATIONS.md](TTS_LATENCY_OPTIMIZATIONS.md) for complete documentation.
 
 ## Configuration
 
