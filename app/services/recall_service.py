@@ -7,6 +7,7 @@ import aiohttp
 import tempfile
 import json
 import logging
+import base64
 
 #from app.services.cloudinary_service import upload_to_cloudinary
 from app.core.config import settings
@@ -257,6 +258,80 @@ class RecallAPIService:
 
         except Exception as e:
             return {"error": f"Error getting bot status: {str(e)}"}
+
+    async def inject_output_audio_mp3(self, bot_id: str, audio_bytes: bytes) -> Dict[str, Any]:
+        """Send MP3 audio to an active Recall bot so it can speak in the meeting."""
+        if not bot_id:
+            return {"success": False, "message": "bot_id is required"}
+
+        if not audio_bytes:
+            return {"success": False, "message": "audio_bytes is empty"}
+
+        audio_size = len(audio_bytes)
+        logger.info(
+            "Injecting output audio to Recall bot",
+            extra={"bot_id": bot_id, "audio_size_bytes": audio_size}
+        )
+
+        payload = {
+            "kind": "mp3",
+            "b64_data": base64.b64encode(audio_bytes).decode("utf-8"),
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    f"{self.base_url}/bot/{bot_id}/output_audio/",
+                    headers=self.headers,
+                    json=payload,
+                )
+
+            response_data = None
+            try:
+                response_data = response.json() if response.content else {}
+            except ValueError:
+                response_data = {"raw_response": response.text}
+
+            if response.status_code in (200, 201, 202):
+                logger.info(
+                    "Output audio injected successfully",
+                    extra={"bot_id": bot_id, "status_code": response.status_code}
+                )
+                return {
+                    "success": True,
+                    "message": "Audio injected successfully",
+                    "status_code": response.status_code,
+                    "bot_id": bot_id,
+                    "data": response_data,
+                }
+
+            logger.error(
+                "Failed to inject output audio",
+                extra={
+                    "bot_id": bot_id,
+                    "status_code": response.status_code,
+                    "response_text": response.text[:500],
+                }
+            )
+            return {
+                "success": False,
+                "message": f"Recall output_audio request failed with HTTP {response.status_code}",
+                "status_code": response.status_code,
+                "bot_id": bot_id,
+                "error": response_data,
+            }
+
+        except Exception as e:
+            logger.error(
+                "Unexpected error while injecting output audio",
+                extra={"bot_id": bot_id},
+                exc_info=True,
+            )
+            return {
+                "success": False,
+                "message": f"Unexpected error while injecting output audio: {str(e)}",
+                "bot_id": bot_id,
+            }
 
     async def get_full_transcript(self, bot_id: str) -> Dict[str, Any]:
         """
