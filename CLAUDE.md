@@ -163,7 +163,7 @@ External Services:
 
 **API Layer (`app/api/v1/endpoints/`):**
 - `auth.py` - OAuth login/callback, JWT tokens, user session
-- `meetings.py` - Meeting CRUD, bot join/leave, status tracking
+- `meetings.py` - Meeting CRUD, bot join/leave, status tracking, **voice injection** (`/bot/speak`)
 - `calendar.py` - Google Calendar sync and event management
 - `summarization.py` - AI summary generation endpoints
 - `users.py` - User profile management
@@ -172,7 +172,7 @@ External Services:
 - `rag.py` - **RAG/LLM AI assistant** endpoints with context retrieval
 
 **Service Layer (`app/services/`):**
-- `recall_service.py` (65KB) - **Most critical service** - Recall.ai bot management, recording, transcription, webhook handling
+- `recall_service.py` (65KB) - **Most critical service** - Recall.ai bot management, recording, transcription, webhook handling, **voice injection (`inject_output_audio_mp3`)**
 - `redis_pubsub.py` - Redis pub/sub message broker for real-time features
 - `websocket_manager.py` - WebSocket connection manager for per-meeting transcript streams
 - `summarization.py` - FLAN-T5 model inference, action item extraction
@@ -272,6 +272,7 @@ The `app/services/recall_service.py` (65KB) is the most comprehensive service. K
 - `get_transcript()` - Retrieve meeting transcript
 - `handle_webhook()` - Process Recall.ai events
 - `download_recording()` - Fetch video file
+- `inject_output_audio_mp3()` - **Send MP3 audio to bot for speaking in meeting**
 
 Always check bot status before operations.
 
@@ -395,9 +396,252 @@ GET /api/v1/tts/job/abc123
 POST /api/v1/tts/synthesize-async
   - text: "Hello everyone"
   → Returns instant (<50ms)
-```
+
 
 See [SETUP_TTS.md](SETUP_TTS.md) and [TTS_LATENCY_OPTIMIZATIONS.md](TTS_LATENCY_OPTIMIZATIONS.md) for complete documentation.
+### Voice Injection - Bot Speaking in Meetings
+
+**Overview:**
+Voice injection allows the Digital Twin bot to speak in meetings by sending audio (MP3) to the Recall.ai bot through the `output_audio` API endpoint. This enables the bot to actively participate in conversations, not just listen and record.
+
+**Architecture:**
+```
+User/System → MP3 Audio File → Backend API → Recall.ai Bot → Meeting Platform
+                                    ↓
+                          inject_output_audio_mp3()
+                                    ↓
+                          Base64 encode + API call
+```
+
+**Key Implementation Files:**
+
+1. **Backend Service** ([app/services/recall_service.py:262-334](app/services/recall_service.py)):
+   - `inject_output_audio_mp3(bot_id, audio_bytes)` - Core injection function
+   - Accepts MP3 audio as bytes
+   - Base64 encodes audio data
+   - Sends POST request to `/bot/{bot_id}/output_audio/` endpoint
+   - Returns success/failure status
+
+2. **API Endpoint** ([app/api/v1/endpoints/meetings.py:850-967](app/api/v1/endpoints/meetings.py)):
+   - `POST /api/v1/meetings/bot/speak` - Upload MP3 and inject to active bot
+   - Uses FastAPI's `UploadFile` for file upload
+   - Validates MP3 file type (by extension and MIME type)
+   - **Automatic Bot Selection Logic:**
+     - Finds currently active bot (meeting in `joining`, `in_progress`, or `processing` status)
+     - Falls back to most recently created bot if no active meeting found
+   - Structured logging with user_id, bot_id, meeting_id, audio_size
+
+3. **Demo/Test Script** ([botjoining.js](botjoining.js)):
+   - Node.js example showing direct API usage
+   - Loads MP3 file (`voice1.mp3`)
+   - Converts to base64
+   - Sends to Recall.ai `/output_audio/` endpoint
+   - **Note:** Contains hardcoded API key and bot ID (for demonstration only)
+
+**Usage Workflow:**
+
+**Option 1: Using FastAPI Endpoint (Recommended)**
+```bash
+# Upload MP3 to make bot speak
+curl -X POST http://localhost:8000/api/v1/meetings/bot/speak \
+  -H "Authorization: Bearer <jwt_token>" \
+  -F "audio_file=@response.mp3"
+
+# Response:
+{
+  "success": true,
+  "message": "Audio injected. Bot should speak in the meeting shortly.",
+  "bot_id": "d312e185-8432-40a7-9632-8561a5c6e591",
+  "meeting_id": 42,
+  "meeting_status": "in_progress",
+  "filename": "response.mp3",
+  "audio_size_bytes": 45682,
+  "recall_response": {...}
+}
+```
+
+**Option 2: Direct Recall.ai API Call (Node.js)**
+```javascript
+const fs = require("fs");
+const fetch = require("node-fetch");
+
+const RECALL_API_KEY = "your_api_key";
+const BOT_ID = "your_bot_id";
+
+const audioBuffer = fs.readFileSync("voice.mp3");
+const base64Audio = audioBuffer.toString("base64");
+
+const res = await fetch(
+  `https://ap-northeast-1.recall.ai/api/v1/bot/${BOT_ID}/output_audio/`,
+  {
+    method: "POST",
+    headers: {
+      "Authorization": RECALL_API_KEY,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      kind: "mp3",
+      b64_data: base64Audio
+    })
+  }
+);
+
+const data = await res.json();
+console.log("Voice sent:", data);
+```
+
+**Endpoint Details:**
+
+```python
+# Service layer (recall_service.py)
+async def inject_output_audio_mp3(bot_id: str, audio_bytes: bytes) -> Dict[str, Any]:
+    """
+    Send MP3 audio to an active Recall bot so it can speak in the meeting.
+
+    Args:
+        bot_id: Recall.ai bot ID
+        audio_bytes: Raw MP3 audio data
+
+    Returns:
+        {
+            "success": bool,
+            "message": str,
+            "status_code": int,
+            "bot_id": str,
+            "data": dict  # Recall API response
+        }
+    """
+```
+
+**API Endpoint:**
+```
+POST /api/v1/meetings/bot/speak
+Content-Type: multipart/form-data
+Authorization: Bearer <jwt_token>
+
+Form Data:
+  - audio_file: MP3 file (required)
+
+Response:
+{
+  "success": true,
+  "message": "Audio injected. Bot should speak in the meeting shortly.",
+  "bot_id": "d312e185-...",
+  "meeting_id": 42,
+  "meeting_status": "in_progress",
+  "filename": "response.mp3",
+  "audio_size_bytes": 45682,
+  "recall_response": {...}
+}
+```
+
+**Bot Selection Logic:**
+
+The endpoint automatically selects the appropriate bot:
+
+1. **Active Meeting Priority:**
+   - Searches for user's bots with meetings in `joining`, `in_progress`, or `processing` status
+   - Returns the first active bot found
+
+2. **Fallback to Latest Bot:**
+   - If no active meeting, uses the most recently created bot
+   - Logs a warning with user_id and fallback_bot_id
+
+**File Validation:**
+- Checks file extension: `.mp3`
+- Validates MIME type: `audio/mpeg`, `audio/mp3`, or `application/octet-stream`
+- Rejects empty files (0 bytes)
+- Returns HTTP 400 if validation fails
+
+**Logging:**
+- **Request received:** user_id, filename, content_type
+- **Bot selection:** user_id, bot_id, meeting_id, meeting_status, audio_size
+- **Injection attempt:** bot_id, audio_size_bytes
+- **Success:** user_id, bot_id, meeting_id
+- **Failure:** user_id, bot_id, recall_error details
+
+**Error Handling:**
+```python
+# No bots found
+HTTPException(status_code=404, detail="No bots found for current user")
+
+# Recall API failure
+HTTPException(status_code=502, detail={
+    "message": "Recall API failed to inject audio",
+    "bot_id": "...",
+    "recall_result": {...}
+})
+```
+
+**Testing:**
+
+```bash
+# 1. Create a test MP3 file (use TTS or record audio)
+# 2. Join a meeting with bot
+curl -X POST http://localhost:8000/api/v1/meetings/join \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "meeting_url": "https://meet.google.com/xxx-xxxx-xxx",
+    "bot_name": "Test Bot",
+    "enable_video_recording": true
+  }'
+
+# 3. Inject voice
+curl -X POST http://localhost:8000/api/v1/meetings/bot/speak \
+  -H "Authorization: Bearer <token>" \
+  -F "audio_file=@test_voice.mp3"
+
+# 4. Check Recall.ai response in terminal logs
+```
+
+**Use Cases:**
+1. **Automated Responses:** Bot responds to specific keywords or questions
+2. **Meeting Announcements:** Bot makes scheduled announcements during meetings
+3. **Voice Assistant Integration:** Bot speaks generated TTS responses
+4. **Meeting Facilitation:** Bot can introduce agenda items or remind about time
+
+**Limitations:**
+- Only MP3 format supported
+- Audio quality depends on meeting platform's audio processing
+- Bot must be actively joined to a meeting
+- Latency: ~1-3 seconds from API call to audio playback in meeting
+- File size limit: Controlled by FastAPI's default upload limit (16MB)
+
+**Integration with TTS:**
+Voice injection can be combined with the TTS (Text-to-Speech) system to create a complete voice assistant:
+
+```python
+# Pseudocode: TTS + Voice Injection workflow
+async def make_bot_respond(user_id: int, text: str):
+    # 1. Generate voice using user's voice profile
+    audio_data = await tts_service.synthesize_async(user_id, text)
+
+    # 2. Find active bot
+    bot = find_active_bot(user_id)
+
+    # 3. Inject audio to bot
+    result = await recall_service.inject_output_audio_mp3(
+        bot_id=bot.bot_id,
+        audio_bytes=audio_data
+    )
+
+    return result
+```
+
+**Important Notes:**
+- **Security:** Never commit API keys (see `botjoining.js` warning)
+- **Rate Limiting:** Recall.ai may have rate limits on `output_audio` endpoint
+- **Audio Quality:** Use clear, high-quality MP3 files for best results
+- **Meeting Platform Support:** Not all platforms support bot audio injection (test with your target platform)
+
+**Documentation:**
+- Recall.ai Output Audio API: https://docs.recall.ai/reference/bot_output_audio_create
+- Backend Implementation: [app/services/recall_service.py:262-334](app/services/recall_service.py)
+- API Endpoint: [app/api/v1/endpoints/meetings.py:850-967](app/api/v1/endpoints/meetings.py)
+- Demo Script: [botjoining.js](botjoining.js)
+- Integration Fixes: [BACKEND_FRONTEND_FIXES.md](BACKEND_FRONTEND_FIXES.md)
+- OAuth Setup: [GOOGLE_OAUTH_UPDATE.md](GOOGLE_OAUTH_UPDATE.md)
 
 ## Configuration
 
@@ -566,10 +810,13 @@ async def list_meetings(
 **Feature-Specific Guides:**
 - `REALTIME_TRANSCRIPTION.md` (656 lines) - **Complete real-time WebSocket setup guide**
 - `REDIS_SETUP_WINDOWS.md` (298 lines) - Redis installation and configuration for Windows
+- `BACKEND_FRONTEND_FIXES.md` - Backend-frontend integration fixes (summarization endpoint, transcript endpoint, OAuth redirect)
+- `GOOGLE_OAUTH_UPDATE.md` - Google Cloud Console OAuth configuration update guide
 - `TRANSCRIPT_ENDPOINTS.md` - Transcript API docs
 - `QUICKSTART_REALTIME.md` - Quick start guide for real-time features
 - `AUTH_FIXES.md` - Authentication flow improvements and fixes
 - `FIXES_APPLIED.md` - Backend startup fixes
+- `temporary/README_INFERENCE.md` - Local FLAN-T5 model inference guide
 
 API docs auto-generated at http://localhost:8000/docs (Swagger UI).
 
@@ -590,6 +837,35 @@ API docs auto-generated at http://localhost:8000/docs (Swagger UI).
 - **Frontend AI Assistant** interface at `/dashboard/rag`
 - Real-time transcription via WebSocket (previous feature)
 - Redis pub/sub integration for live updates (previous feature)
+- Active branches:
+  - `rihab/voice_inject` - **Voice injection feature** (pushed, ready for PR)
+  - `feature/response_LLM` - RAG/LLM integration with prompt optimizations (on local)
+- Recent work: Voice injection, backend-frontend integration fixes, OAuth updates
+
+**Voice Injection Branch (`rihab/voice_inject`):**
+- **Key additions:**
+  - Voice injection API endpoint (`POST /api/v1/meetings/bot/speak`)
+  - `inject_output_audio_mp3()` function in `recall_service.py`
+  - Node.js demo script (`botjoining.js`)
+  - Backend-frontend integration fixes (summarization endpoint, transcript endpoint, OAuth redirect)
+  - Documentation: `BACKEND_FRONTEND_FIXES.md`, `GOOGLE_OAUTH_UPDATE.md`, `temporary/README_INFERENCE.md`
+- **Modified files:**
+  - `app/services/recall_service.py` - Added voice injection function
+  - `app/api/v1/endpoints/meetings.py` - Added `/bot/speak` endpoint with automatic bot selection
+  - `frontend/web_gui/package.json`, `frontend/web_gui/package-lock.json` - Updated dependencies
+  - `frontend/web_gui/README.md` - Frontend documentation
+- **New files:**
+  - `botjoining.js` - Voice injection demo script (Node.js)
+  - `BACKEND_FRONTEND_FIXES.md` - Integration fixes documentation
+  - `GOOGLE_OAUTH_UPDATE.md` - OAuth configuration update guide
+  - `temporary/README_INFERENCE.md` - Local model inference guide
+  - `temporary/setup.sh` - Setup script
+
+**Response LLM Branch (`feature/response_LLM`):**
+- RAG module with LLM integration (Qwen2.5-0.5B-Instruct)
+- Prompt engineering optimizations (83% accuracy, 400% improvement)
+- Automatic meeting transcript storage in RAG
+- See main CLAUDE.md for complete RAG/LLM documentation
 
 **When committing:**
 - Keep feature work in feature branches
