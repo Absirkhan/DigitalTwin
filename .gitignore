@@ -98,3 +98,19 @@ secrets/
 credentials/
 *.key
 *.pem
+# RAG Module data and models
+rag_module/data/
+rag_module/models/*.gguf
+rag_module/models/*.bin
+
+# TTS/Voice cloning data
+data/voice_profiles/
+neutts/
+
+# Test files
+test_*.py
+nul
+temp_*.txt
+
+# PDF documents (semester proposals, etc.)
+semester_proposal.pdf

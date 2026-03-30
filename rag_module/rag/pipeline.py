@@ -26,13 +26,20 @@ memory for optimal performance and context relevance.
 
 import time
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Generator, Optional
 from rag.embedder import EmbeddingEngine
 from rag.faiss_store import FAISSStore
 from rag.retriever import ContextRetriever
 from rag.memory_manager import SessionMemory
 from rag.profile_manager import UserProfileManager
 from rag.prompt_builder import PromptBuilder
+
+# Import LLM generator (optional - for response generation)
+try:
+    from rag.llm_generator import LLMGenerator
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
 
 
 class RAGPipeline:
@@ -56,7 +63,7 @@ class RAGPipeline:
         faiss_stores: Dict of user_id -> FAISSStore instances
     """
 
-    def __init__(self, base_path: str = "data/users"):
+    def __init__(self, base_path: str = "data/users", enable_llm: bool = True):
         """
         Initialize RAG pipeline.
 
@@ -64,6 +71,7 @@ class RAGPipeline:
 
         Args:
             base_path: Base directory for user data storage
+            enable_llm: Whether to load LLM for response generation (default True)
         """
         self.base_path = Path(base_path)
         self.base_path.mkdir(parents=True, exist_ok=True)
@@ -75,6 +83,22 @@ class RAGPipeline:
         self.retriever = ContextRetriever(self.embedder)
         self.profile_manager = UserProfileManager(str(self.base_path))
         self.prompt_builder = PromptBuilder()
+
+        # Initialize LLM generator (optional)
+        self.llm_generator = None
+        if enable_llm and LLM_AVAILABLE:
+            try:
+                self.llm_generator = LLMGenerator(verbose=False)
+                if self.llm_generator.model_loaded:
+                    print("[OK] LLM generator loaded")
+                else:
+                    print("[WARN] LLM generator failed to load model")
+                    self.llm_generator = None
+            except Exception as e:
+                print(f"[WARN] LLM generator unavailable: {e}")
+                self.llm_generator = None
+        elif enable_llm and not LLM_AVAILABLE:
+            print("[WARN] LLM generator unavailable (llama-cpp-python not installed)")
 
         # Per-user state
         self.session_memories = {}  # user_id -> SessionMemory
@@ -167,7 +191,7 @@ class RAGPipeline:
             user_id=user_id,
             query=message,
             top_k=3,
-            threshold=0.5,
+            threshold=0.0,  # Accept all results, rely on top_k for limiting
             base_path=str(self.base_path)
         )
 
@@ -277,6 +301,194 @@ class RAGPipeline:
             "total_exchanges_stored": total_exchanges
         }
 
+    def generate_response(
+        self,
+        user_id: str,
+        message: str,
+        max_tokens: Optional[int] = None,
+        use_cache: bool = True,
+        auto_store: bool = True
+    ) -> Dict:
+        """
+        Generate LLM response with RAG context (non-streaming).
+
+        This is the main method for complete end-to-end response generation.
+        It combines RAG context retrieval with LLM inference to produce
+        context-aware responses.
+
+        Flow:
+        1. Retrieve relevant past exchanges (RAG)
+        2. Build prompt with context
+        3. Check LLM cache
+        4. Generate response (or return cached)
+        5. Optionally store exchange in long-term memory
+
+        Args:
+            user_id: User identifier
+            message: User message text
+            max_tokens: Maximum tokens to generate (default 200)
+            use_cache: Whether to use LLM cache (default True)
+            auto_store: Automatically store exchange after generation (default True)
+
+        Returns:
+            Dictionary containing:
+            {
+                "response": "Generated text...",
+                "retrieval_latency_ms": 15.2,
+                "llm_latency_ms": 3240.5,
+                "total_latency_ms": 3255.7,
+                "tokens_generated": 150,
+                "cached": False,
+                "token_breakdown": {...},
+                "num_results_retrieved": 2
+            }
+
+        Raises:
+            RuntimeError: If LLM generator is not available
+        """
+        if not self.llm_generator:
+            raise RuntimeError(
+                "LLM generator not available. "
+                "Ensure llama-cpp-python is installed and model is downloaded."
+            )
+
+        # Get prompt with RAG context (using existing method)
+        start_total = time.perf_counter()
+        prompt_result = self.process_message(user_id, message)
+
+        retrieval_latency_ms = prompt_result['retrieval_latency_ms']
+        prompt = prompt_result['prompt']
+
+        # Generate response with LLM
+        start_llm = time.perf_counter()
+        llm_result = self.llm_generator.generate_response(
+            prompt=prompt,
+            max_tokens=max_tokens,
+            use_cache=use_cache
+        )
+        llm_latency_ms = (time.perf_counter() - start_llm) * 1000
+
+        total_latency_ms = (time.perf_counter() - start_total) * 1000
+
+        # Store exchange if requested
+        if auto_store and llm_result.get('response'):
+            self.store_exchange(user_id, message, llm_result['response'])
+
+        # Return complete result
+        return {
+            "response": llm_result.get('response', ''),
+            "retrieval_latency_ms": retrieval_latency_ms,
+            "llm_latency_ms": llm_latency_ms,
+            "total_latency_ms": total_latency_ms,
+            "tokens_generated": llm_result.get('tokens_generated', 0),
+            "cached": llm_result.get('cached', False),
+            "cache_age_seconds": llm_result.get('cache_age_seconds', 0),
+            "token_breakdown": prompt_result['token_breakdown'],
+            "num_results_retrieved": prompt_result['num_results_retrieved']
+        }
+
+    def generate_response_stream(
+        self,
+        user_id: str,
+        message: str,
+        max_tokens: Optional[int] = None,
+        use_cache: bool = True,
+        auto_store: bool = True
+    ) -> Generator[Dict, None, None]:
+        """
+        Generate LLM response with streaming (yields tokens as they generate).
+
+        This method provides improved perceived latency by showing tokens
+        as they're generated, rather than waiting for the full response.
+
+        Args:
+            user_id: User identifier
+            message: User message text
+            max_tokens: Maximum tokens to generate
+            use_cache: Whether to use LLM cache
+            auto_store: Automatically store exchange after generation
+
+        Yields:
+            Dictionaries with different event types:
+
+            {"type": "context", "num_results": 2, "retrieval_latency_ms": 15.2}
+            {"type": "token", "content": "Hello"}
+            {"type": "token", "content": " world"}
+            {"type": "done", "tokens_generated": 150, "latency_ms": 3240.5, "cached": False}
+            {"type": "error", "error": "..."}
+
+        Raises:
+            RuntimeError: If LLM generator is not available
+        """
+        if not self.llm_generator:
+            raise RuntimeError(
+                "LLM generator not available. "
+                "Ensure llama-cpp-python is installed and model is downloaded."
+            )
+
+        # Get prompt with RAG context
+        start_total = time.perf_counter()
+        prompt_result = self.process_message(user_id, message)
+
+        # Yield context retrieval event
+        yield {
+            "type": "context",
+            "num_results": prompt_result['num_results_retrieved'],
+            "retrieval_latency_ms": prompt_result['retrieval_latency_ms'],
+            "token_breakdown": prompt_result['token_breakdown']
+        }
+
+        prompt = prompt_result['prompt']
+        full_response = ""
+
+        # Stream LLM generation
+        for chunk in self.llm_generator.generate_response_stream(
+            prompt=prompt,
+            max_tokens=max_tokens,
+            use_cache=use_cache
+        ):
+            if chunk['type'] == 'token':
+                full_response += chunk['content']
+
+            yield chunk
+
+        # Store exchange if requested and response was generated
+        if auto_store and full_response:
+            self.store_exchange(user_id, message, full_response.strip())
+
+        # Calculate total latency
+        total_latency_ms = (time.perf_counter() - start_total) * 1000
+
+        # Yield final total latency
+        yield {
+            "type": "metadata",
+            "total_latency_ms": total_latency_ms,
+            "retrieval_latency_ms": prompt_result['retrieval_latency_ms']
+        }
+
+    def get_llm_cache_stats(self) -> Dict:
+        """
+        Get LLM cache statistics.
+
+        Returns:
+            Dictionary with cache hit rate, total queries, etc.
+            Returns empty dict if LLM generator not available.
+        """
+        if self.llm_generator:
+            return self.llm_generator.get_cache_stats()
+        return {}
+
+    def clear_llm_cache(self) -> int:
+        """
+        Clear LLM response cache.
+
+        Returns:
+            Number of cache entries cleared, or 0 if LLM not available
+        """
+        if self.llm_generator:
+            return self.llm_generator.clear_cache()
+        return 0
+
     def get_user_stats(self, user_id: str) -> Dict:
         """
         Get comprehensive statistics for a user.
@@ -290,6 +502,7 @@ class RAGPipeline:
             - total_exchanges: Total exchanges in FAISS
             - session_messages: Current session message count
             - profile: User profile dictionary
+            - llm_cache_stats: LLM cache statistics (if available)
         """
         # Get FAISS stats
         total_exchanges = 0
@@ -306,11 +519,15 @@ class RAGPipeline:
         if self.profile_manager.profile_exists(user_id):
             profile = self.profile_manager.load_profile(user_id)
 
+        # Get LLM cache stats
+        llm_cache_stats = self.get_llm_cache_stats()
+
         return {
             "user_id": user_id,
             "total_exchanges": total_exchanges,
             "session_messages": session_messages,
-            "profile": profile
+            "profile": profile,
+            "llm_cache_stats": llm_cache_stats
         }
 
 

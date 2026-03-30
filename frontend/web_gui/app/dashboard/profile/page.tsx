@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { userService } from '@/lib/api';
 import type { User, UserUpdate } from '@/lib/api/types';
+import VoiceSetup from '@/app/components/VoiceSetup';
 
 export default function ProfilePage() {
   const [user, setUser] = useState<User | null>(null);
@@ -370,6 +371,19 @@ export default function ProfilePage() {
             </dl>
           </div>
         )}
+      </div>
+
+      {/* Voice Profile Section */}
+      <div>
+        <div className="mb-4">
+          <h2 className="text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
+            Voice Profile
+          </h2>
+          <p className="text-sm mt-1" style={{ color: 'var(--text-secondary)' }}>
+            Record a voice sample to enable your bot to speak in your voice during meetings
+          </p>
+        </div>
+        <VoiceSetup userFullName={user.full_name} />
       </div>
 
       {/* Account Settings */}

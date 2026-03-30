@@ -3,12 +3,19 @@ Digital Twin Main Application
 AI-powered meeting automation system with Google OAuth
 """
 
+# Fix Unicode encoding issues on Windows
+import sys
+import os
+if os.name == 'nt':  # Windows
+    import codecs
+    sys.stdout = codecs.getwriter('utf-8')(sys.stdout.buffer, 'strict')
+    sys.stderr = codecs.getwriter('utf-8')(sys.stderr.buffer, 'strict')
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from contextlib import asynccontextmanager
-import os
 
 from app.core.config import settings
 from app.core.database import init_db
@@ -58,6 +65,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️ Meeting status monitor failed to start: {e}")
         print("   Meeting statuses will need to be updated manually")
+
+    # Pre-warm TTS model (eliminates 30s first-request delay)
+    try:
+        print("🔥 Pre-warming TTS model...")
+        from app.services.tts_service import tts_service
+        import asyncio
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, tts_service._load_model)
+        print("✅ TTS model pre-warmed and ready (eliminates first-request delay)")
+    except Exception as e:
+        print(f"⚠️ TTS model pre-warming failed: {e}")
+        print("   First TTS request will be slower (~30s)")
+
+    # Pre-warm RAG/LLM model (eliminates 10-15s first-request delay)
+    try:
+        print("🔥 Pre-warming RAG/LLM model...")
+        from app.services.rag_service import rag_service
+        await rag_service.initialize()
+        print("✅ RAG/LLM model pre-warmed and ready (eliminates first-request delay)")
+    except Exception as e:
+        print(f"⚠️ RAG/LLM model pre-warming failed: {e}")
+        print("   First RAG query will be slower (~10-15s)")
 
     print("✅ DigitalTwin application started successfully!")
     print(f"📡 Real-time transcription webhook: {settings.REALTIME_WEBHOOK_URL}")

@@ -51,7 +51,7 @@ class PromptBuilder:
         response_buffer: Tokens reserved for response (default 500)
     """
 
-    def __init__(self, token_budget: int = 2150, response_buffer: int = 500):
+    def __init__(self, token_budget: int = 2150, response_buffer: int = 1000):
         """
         Initialize prompt builder.
 
@@ -60,11 +60,11 @@ class PromptBuilder:
 
         Args:
             token_budget: Total token budget for prompt + response
-            response_buffer: Tokens to reserve for LLM response
+            response_buffer: Tokens to reserve for LLM response (increased to 1000 for longer responses)
         """
         self.token_budget = token_budget
         self.response_buffer = response_buffer
-        self.prompt_limit = token_budget - response_buffer  # 1650 tokens
+        self.prompt_limit = token_budget - response_buffer  # 1150 tokens
 
         # Try to initialize tiktoken
         self.encoding = None
@@ -113,7 +113,7 @@ class PromptBuilder:
         Build the system prompt.
 
         The system prompt defines the assistant's role and behavior.
-        It optionally includes the user's style summary for personalization.
+        Optimized for small LLMs with clear, direct instructions.
 
         Args:
             style_summary: User style summary from ProfileManager (optional)
@@ -121,11 +121,19 @@ class PromptBuilder:
         Returns:
             System prompt string
         """
-        base_prompt = """You are a helpful AI assistant. Provide clear, accurate, and helpful responses.
-When relevant context from past conversations is provided, use it to give more personalized answers."""
+        # Simplified prompt for small LLMs - direct and clear instructions
+        base_prompt = """You are a helpful assistant. Answer questions directly using the provided context.
 
-        if style_summary:
-            base_prompt += f"\n\nUser communication style: {style_summary}"
+INSTRUCTIONS:
+1. Use ONLY information from "Past conversations" section if provided
+2. Give direct, specific answers (avoid vague responses)
+3. If the context contains the answer, extract it clearly
+4. If no relevant context, say "I don't have information about that"
+5. Keep answers concise (2-3 sentences)"""
+
+        # Skip style summary for small models - reduces confusion
+        # if style_summary:
+        #     base_prompt += f"\n\nUser style: {style_summary}"
 
         return base_prompt
 
@@ -214,16 +222,18 @@ When relevant context from past conversations is provided, use it to give more p
             truncated_context = self._truncate_to_budget(retrieved_context, remaining_budget)
             tokens_context = self.count_tokens(truncated_context)
 
-        # Assemble final prompt
+        # Assemble final prompt - simplified structure for small LLMs
         prompt_parts = [system_prompt]
 
         if truncated_context:
-            prompt_parts.append(f"\nRelevant past conversations:\n{truncated_context}")
+            prompt_parts.append(f"\n---\nPast conversations:\n{truncated_context}\n---")
 
-        if truncated_history:
-            prompt_parts.append(f"\nCurrent session:\n{truncated_history}")
+        # Skip session history for small models - reduces noise
+        # if truncated_history:
+        #     prompt_parts.append(f"\nCurrent session:\n{truncated_history}")
 
-        prompt_parts.append(f"\nUser: {user_message}")
+        # Clear separation between context and question
+        prompt_parts.append(f"\nQuestion: {user_message}\nAnswer:")
 
         full_prompt = "\n".join(prompt_parts)
 

@@ -12,7 +12,8 @@ celery_app = Celery(
     include=[
         "app.services.meeting_automation",
         "app.services.voice_processing",
-        "app.services.ai_responses"
+        "app.services.ai_responses",
+        "app.services.tts_tasks"  # TTS background tasks
     ]
 )
 
@@ -30,4 +31,10 @@ celery_app.conf.update(
     task_soft_time_limit=25 * 60,  # 25 minutes
     beat_schedule=beat_schedule,  # Add beat schedule
     beat_scheduler='django_celery_beat.schedulers:DatabaseScheduler',  # Use database scheduler if available
+
+    # Windows-specific configuration
+    # Use 'solo' pool on Windows (no multiprocessing issues)
+    # For production on Linux/Mac, use 'prefork' or 'gevent'
+    worker_pool='solo',  # Single-threaded but stable on Windows
+    worker_concurrency=1,  # Solo pool only supports 1 worker
 )

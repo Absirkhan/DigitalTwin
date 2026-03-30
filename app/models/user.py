@@ -19,7 +19,8 @@ class User(Base):
     profile_picture = Column(String)
     bot_name = Column(String)
     enable_backend_tasks = Column(Boolean, default=True)
-    
+    has_voice_profile = Column(Boolean, default=False, nullable=False)
+
     # OAuth tokens stored as JSON
     oauth_tokens = Column(JSON)
 

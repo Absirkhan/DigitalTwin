@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import AsyncSessionLocal
 from app.models.meeting import Meeting
 from app.models.bot import Bot
+from app.models.user import User
 from app.services.recall_service import recall_service
 
 logger = logging.getLogger(__name__)
@@ -173,6 +174,54 @@ class MeetingStatusMonitor:
                 # Also mark bot recording as completed
                 if bot_status == "done":
                     bot.recording_status = "completed"
+
+                    # ===== AUTO-STORE TRANSCRIPT IN RAG =====
+                    # Automatically store meeting transcript in RAG for future context retrieval
+                    try:
+                        # Get user information for name detection
+                        user_result = await db.execute(
+                            select(User).filter(User.id == meeting.user_id)
+                        )
+                        user = user_result.scalar_one_or_none()
+
+                        if user:
+                            # Import RAG service
+                            from app.services.rag_service import rag_service
+
+                            # Determine user's name in transcript
+                            user_name = user.full_name or user.email.split('@')[0]
+                            bot_name = user.bot_name or f"{user_name}'s Bot"
+
+                            # Store transcript in RAG
+                            logger.info(f"📝 Storing transcript in RAG for meeting {meeting.id}...")
+
+                            result = await rag_service.store_meeting_transcript(
+                                user_id=str(meeting.user_id),
+                                bot_id=bot.bot_id,
+                                user_name=user_name,
+                                bot_name=bot_name
+                            )
+
+                            if result.get('success'):
+                                logger.info(
+                                    f"✅ Stored {result['total_exchanges_stored']} transcript "
+                                    f"exchanges in RAG for meeting {meeting.id} "
+                                    f"({len(result['speakers'])} speakers: {', '.join(result['speakers'])})"
+                                )
+                            else:
+                                logger.warning(
+                                    f"⚠️ Failed to store transcript in RAG for meeting {meeting.id}: "
+                                    f"{result.get('error', 'Unknown error')}"
+                                )
+                        else:
+                            logger.warning(f"⚠️ User {meeting.user_id} not found for RAG storage")
+
+                    except Exception as rag_error:
+                        # Don't fail the status update if RAG storage fails
+                        logger.error(
+                            f"❌ Error storing transcript in RAG for meeting {meeting.id}: {rag_error}",
+                            exc_info=True
+                        )
 
         except Exception as e:
             logger.error(f"❌ Error checking meeting {meeting.id} status: {e}", exc_info=True)

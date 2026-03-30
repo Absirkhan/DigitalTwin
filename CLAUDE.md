@@ -33,7 +33,10 @@ uvicorn app.main:app --reload                     # http://localhost:8000
 uvicorn app.main:app --reload --port 8001         # Custom port
 
 # Background task worker (Celery)
-celery -A app.core.celery worker --loglevel=info  # Required for async tasks
+# Windows (use solo pool to avoid multiprocessing issues)
+celery -A app.core.celery worker --loglevel=info --pool=solo
+# Linux/Mac (use prefork for better concurrency)
+celery -A app.core.celery worker --loglevel=info
 
 # Utility scripts
 python scripts/init_db.py                         # Initialize database
@@ -165,6 +168,8 @@ External Services:
 - `summarization.py` - AI summary generation endpoints
 - `users.py` - User profile management
 - `realtime.py` - **Real-time transcription** WebSocket and webhook endpoints
+- `tts.py` - **Voice cloning and TTS** endpoints with caching and async synthesis
+- `rag.py` - **RAG/LLM AI assistant** endpoints with context retrieval
 
 **Service Layer (`app/services/`):**
 - `recall_service.py` (65KB) - **Most critical service** - Recall.ai bot management, recording, transcription, webhook handling, **voice injection (`inject_output_audio_mp3`)**
@@ -175,6 +180,11 @@ External Services:
 - `calendar.py` - Google Calendar integration
 - `meeting.py` - Meeting business logic
 - `meeting_automation.py` - Auto-join scheduling logic
+- `meeting_status_monitor.py` - **Auto-store transcripts in RAG** when meeting completes
+- `tts_service.py` - **NeuTTS Nano voice cloning** with model pre-warming
+- `tts_cache.py` - **Redis caching for TTS** responses (<50ms cache hits)
+- `tts_tasks.py` - **Celery background tasks** for async TTS synthesis
+- `rag_service.py` - **RAG/LLM integration** singleton service with pre-warming
 
 **Data Layer:**
 - `app/models/` - SQLAlchemy ORM models (user, meeting, bot, calendar_event, email)
@@ -197,13 +207,15 @@ External Services:
 **UI Components:**
 - `app/components/` - Reusable UI components
 - `app/components/RealtimeTranscript.tsx` - **Real-time transcript viewer** with WebSocket connection
+- `app/components/VoiceSetup.tsx` - **Voice profile management** with recording, preview, and caching
+- `app/components/RagQuery.tsx` - **RAG/LLM AI assistant** query interface with metrics
 - `app/contexts/` - React context providers (theme, auth)
 - `app/styles/` - CSS modules and Tailwind utilities
 
 ## Database Schema
 
 **Core tables (implemented):**
-1. **users** - OAuth tokens, profile, `bot_name` (custom name for meeting bot), `enable_backend_tasks`
+1. **users** - OAuth tokens, profile, `bot_name` (custom name for meeting bot), `enable_backend_tasks`, `has_voice_profile` (TTS)
 2. **meetings** - Full lifecycle tracking, `transcript` (text), `summary` (text), `action_items` (JSON array)
 3. **bots** - Recall.ai bot status, `recording_url`, `video_url`, `meeting_id` FK
 4. **calendar_events** - Google Calendar sync, meeting URL extraction
@@ -306,6 +318,87 @@ GET /api/v1/realtime/status/{meeting_id}
 
 See [REALTIME_TRANSCRIPTION.md](REALTIME_TRANSCRIPTION.md) for complete setup guide.
 
+### Voice Cloning and TTS (Text-to-Speech)
+
+**Technology**: NeuTTS Nano with Q4 GGUF quantization for CPU inference
+
+**Architecture**: Voice profile → Redis cache → Celery async jobs → Synthesized speech
+
+**Prerequisites:**
+1. eSpeak NG installed (phonemization - see [SETUP_TTS.md](SETUP_TTS.md))
+2. NeuTTS installed: `git clone https://github.com/neuphonic/neutts.git && pip install -e ./neutts`
+3. Redis running (for caching)
+4. Celery worker running (for async synthesis)
+
+**Workflow:**
+1. User records 15-second voice sample on profile page
+2. NeuTTS encodes voice → saves to `data/voice_profiles/{user_id}/`
+3. User generates preview with custom text
+4. System checks Redis cache first (instant if cached)
+5. If not cached → Celery async job synthesizes speech
+6. Frontend polls for completion → auto-plays when ready
+
+**Performance Optimizations:**
+- **Model pre-warming on startup** - Eliminates 30s first-request delay
+- **Redis caching** - <50ms response for repeated phrases (40-60x faster)
+- **Celery async jobs** - Non-blocking UI, instant API response
+- **50-word limit** - Optimal synthesis time (2-3s max)
+- **Job polling** - Real-time progress tracking
+
+**Expected Latency:**
+- First request (after pre-warm): 2-3 seconds
+- Cached phrases: <50ms (instant)
+- Average with 40% cache hit rate: ~1.2 seconds
+
+**Key Files:**
+- Backend: [app/services/tts_service.py](app/services/tts_service.py), [app/services/tts_cache.py](app/services/tts_cache.py), [app/services/tts_tasks.py](app/services/tts_tasks.py)
+- API: [app/api/v1/endpoints/tts.py](app/api/v1/endpoints/tts.py)
+- Frontend: [app/components/VoiceSetup.tsx](app/components/VoiceSetup.tsx), [lib/api/tts.ts](lib/api/tts.ts)
+
+**Endpoints:**
+- `POST /api/v1/tts/upload-voice` - Upload voice sample
+- `GET /api/v1/tts/voice-status` - Check if user has voice profile
+- `GET /api/v1/tts/voice-info` - Get profile info + cache stats
+- `GET /api/v1/tts/original-recording` - Download original voice sample
+- `POST /api/v1/tts/synthesize` - Sync synthesis (with cache)
+- `POST /api/v1/tts/synthesize-async` - Async synthesis (returns job_id)
+- `GET /api/v1/tts/job/{job_id}` - Poll job status
+- `DELETE /api/v1/tts/voice` - Delete voice profile
+
+**Celery Worker (Windows):**
+```bash
+celery -A app.core.celery worker --loglevel=info --pool=solo
+```
+
+**Why `--pool=solo` on Windows:**
+- Windows has multiprocessing issues with default `prefork` pool
+- `solo` pool = single-threaded, stable, no permission errors
+- Still non-blocking for users (main benefit preserved)
+- For production on Linux, use `prefork` or `gevent`
+
+**Testing:**
+```bash
+# Upload voice
+POST /api/v1/tts/upload-voice
+  - audio_file: voice_sample.wav
+  - ref_text: "My name is John..."
+
+# Generate preview (async)
+POST /api/v1/tts/synthesize-async
+  - text: "Hello everyone"
+  → Returns: {"job_id": "abc123", "status": "queued"}
+
+# Poll for result
+GET /api/v1/tts/job/abc123
+  → Returns: {"status": "success", "result": {"audio_data": "base64..."}}
+
+# Generate again (cache hit)
+POST /api/v1/tts/synthesize-async
+  - text: "Hello everyone"
+  → Returns instant (<50ms)
+
+
+See [SETUP_TTS.md](SETUP_TTS.md) and [TTS_LATENCY_OPTIMIZATIONS.md](TTS_LATENCY_OPTIMIZATIONS.md) for complete documentation.
 ### Voice Injection - Bot Speaking in Meetings
 
 **Overview:**
@@ -731,6 +824,19 @@ API docs auto-generated at http://localhost:8000/docs (Swagger UI).
 
 **Current status:**
 - Main branch: `main`
+- Feature branch: `feature/response_LLM` (currently active)
+- Recent additions: TTS voice cloning, RAG/LLM integration, prompt engineering optimizations
+- Modified files: Backend API endpoints, frontend components, RAG module, configuration files
+- Untracked: `rag_module/models/`, `rag_module/data/`, `data/voice_profiles/`, test files, neutts/
+
+**Recent features added:**
+- **TTS voice cloning** with NeuTTS Nano, Redis caching, Celery async jobs
+- **RAG/LLM integration** with Qwen2.5-0.5B model, FAISS retrieval, Redis caching
+- **Prompt engineering** optimizations for small LLM (400% accuracy improvement)
+- **Automatic transcript storage** in RAG when meetings complete
+- **Frontend AI Assistant** interface at `/dashboard/rag`
+- Real-time transcription via WebSocket (previous feature)
+- Redis pub/sub integration for live updates (previous feature)
 - Active branches:
   - `rihab/voice_inject` - **Voice injection feature** (pushed, ready for PR)
   - `feature/response_LLM` - RAG/LLM integration with prompt optimizations (on local)
@@ -885,6 +991,8 @@ rag_module/
 │   ├── memory_manager.py        # Session memory (in-memory, max 6 msgs)
 │   ├── profile_manager.py       # User profiling and style analysis
 │   ├── prompt_builder.py        # Token budget and prompt assembly
+│   ├── llm_generator.py         # **LLM inference** (Qwen2.5-0.5B, llama-cpp)
+│   ├── llm_cache.py             # **Redis caching** for LLM responses
 │   └── pipeline.py              # Main RAG orchestrator
 ├── tests/                        # Comprehensive test suite
 │   ├── __init__.py
@@ -892,14 +1000,20 @@ rag_module/
 │   ├── test_retriever.py        # Retrieval tests
 │   ├── test_profile.py          # Profile manager tests
 │   └── test_pipeline.py         # End-to-end integration tests
+├── models/                       # **LLM model files**
+│   ├── qwen2.5-0.5b-instruct-q4_k_m.gguf  # Quen model (not in git)
+│   └── README.md                # Model download instructions
 ├── data/                         # User data storage
 │   └── users/                   # Per-user directories
 │       └── {user_id}/
 │           ├── faiss_index.bin  # FAISS vector index
 │           ├── metadata.json    # Exchange metadata
 │           └── profile.json     # User profile
+├── config.py                     # **Configuration** (model settings, cache, etc.)
 ├── demo.py                       # Full system demonstration
 ├── benchmark.py                  # Latency benchmarking tool
+├── LLM_INTEGRATION.md            # **LLM integration guide**
+├── QUICKSTART_LLM.md             # **Quick start for LLM features**
 └── test_simple.py               # Quick sanity check
 ```
 
@@ -950,12 +1064,28 @@ rag_module/
 - Offline fallback (word-based estimation when tiktoken unavailable)
 - Accurate token counting with tiktoken (cl100k_base encoding)
 
-**7. RAGPipeline (`pipeline.py`)**
+**7. LLMGenerator (`llm_generator.py`)**
+- Qwen2.5-0.5B-Instruct model loading and inference
+- llama-cpp-python backend for CPU execution
+- Streaming and non-streaming generation modes
+- Configurable temperature, top-p, top-k sampling
+- Stop sequences to prevent rambling
+- Model pre-warming on startup (eliminates 10-15s delay)
+
+**8. LLMResponseCache (`llm_cache.py`)**
+- Redis-based response caching with SHA256 keys
+- 24-hour TTL (configurable)
+- Cache hit/miss tracking
+- <50ms response time for cached queries
+- Automatic cache key generation from prompt + params
+
+**9. RAGPipeline (`pipeline.py`)**
 - Main orchestrator class
 - User initialization and lifecycle management
 - Message processing and exchange storage
 - Session management (start/end)
 - User statistics and analytics
+- **LLM integration** - Calls LLMGenerator for response generation
 
 ### Usage Example
 
@@ -1056,52 +1186,128 @@ def retrieve(self, user_id: str, query: str,
     # top_k: maximum results to return
 ```
 
-### Integration with Main App
+### Integration with Main App - COMPLETED
 
-The RAG module is **currently standalone** and not integrated with the main DigitalTwin FastAPI application. To integrate:
+The RAG module is **now fully integrated** with the main DigitalTwin FastAPI application.
 
-1. **Add RAG endpoints** in `app/api/v1/endpoints/rag.py`:
-```python
-from rag.pipeline import RAGPipeline
+#### LLM Integration (Qwen2.5-0.5B-Instruct)
 
-# Initialize pipeline once at startup
-rag_pipeline = RAGPipeline(base_path="rag_module/data/users")
+**Model Details:**
+- Model: Qwen2.5-0.5B-Instruct (Q4_K_M quantization, ~400MB)
+- Backend: llama-cpp-python for CPU inference
+- Context window: 2150 tokens (prompt) + 1000 tokens (response)
+- Caching: Redis with 24-hour TTL (SHA256-based keys)
+- Performance: 2-6s generation, <50ms cached
 
-@router.post("/rag/process")
-async def process_message(user_id: str, message: str):
-    result = rag_pipeline.process_message(user_id, message)
-    return result
+**Architecture:**
+```
+User Query → RAG Service → FAISS Retrieval → Prompt Assembly → Qwen LLM → Redis Cache → Response
+                ↓                                                    ↓
+          Per-user FAISS                                    llama-cpp-python
 ```
 
-2. **Store exchanges** after AI summary generation:
-```python
-# In app/services/summary_service.py
-async def generate_summary(meeting_id: int, transcript: str):
-    summary = await ai_model.summarize(transcript)
+**Key Files:**
+- `rag_module/rag/llm_generator.py` - LLM inference with llama-cpp
+- `rag_module/rag/llm_cache.py` - Redis caching layer
+- `rag_module/config.py` - Model configuration (max_tokens, temperature, etc.)
+- `app/services/rag_service.py` - FastAPI integration wrapper
+- `app/api/v1/endpoints/rag.py` - REST API endpoints
 
-    # Store in RAG for future context
-    rag_pipeline.store_exchange(
-        user_id=str(meeting.user_id),
-        user_message=f"Meeting: {meeting.title}",
-        assistant_response=summary
-    )
+**Endpoints:**
+- `POST /api/v1/rag/query` - Query with context retrieval + LLM generation
+- `GET /api/v1/rag/stats` - User statistics (total exchanges, profile)
+- `GET /api/v1/rag/cache/stats` - Cache hit/miss rates
+- `POST /api/v1/rag/store-transcript/{meeting_id}` - Manual transcript storage
+- `DELETE /api/v1/rag/session` - Clear session memory
+
+**Automatic Transcript Storage:**
+When a meeting status changes to "completed", the system automatically:
+1. Fetches full transcript from Recall.ai
+2. Groups consecutive speaker messages
+3. Stores each speaker's dialogue as separate exchange
+4. Format: `"{speaker}: {text}"` → stored in user's FAISS index
+
+**Prompt Engineering for Small LLMs:**
+The system uses optimized prompting for the 0.5B model:
+
+```
+System Prompt (simplified, direct instructions):
+  "You are a helpful assistant. Answer questions directly using the provided context.
+
+  INSTRUCTIONS:
+  1. Use ONLY information from 'Past conversations' section if provided
+  2. Give direct, specific answers (avoid vague responses)
+  3. If the context contains the answer, extract it clearly
+  4. If no relevant context, say 'I don't have information about that'
+  5. Keep answers concise (2-3 sentences)"
+
+Context Section:
+  ---
+  Past conversations:
+  [Retrieved context from FAISS]
+  ---
+
+Question/Answer Format:
+  Question: {user_query}
+  Answer:
 ```
 
-3. **Use context for AI responses**:
+**Performance Optimizations Applied:**
+- Retrieval threshold lowered from 0.5 to 0.0 (accept all results, use top_k=3)
+- Response buffer increased from 500 to 1000 tokens
+- Default max_tokens increased from 200 to 500
+- Removed style summary (confusing for small models)
+- Removed session history (reduces noise)
+- Clear question/answer separation
+
+**Results:**
+- Retrieval accuracy: 83% (5/6 test queries)
+- LLM response accuracy: 83% (5/6 test queries) - **400% improvement** from 17%
+- Average response length: 25-150 tokens (was 3-15)
+- Total latency: 2-6 seconds uncached, <50ms cached
+
+**Frontend Integration:**
+- Component: `frontend/web_gui/app/components/RagQuery.tsx`
+- Page: `/dashboard/rag` (AI Assistant)
+- Features: Query interface, latency metrics, sample queries, cache stats, user stats
+- API client: `frontend/web_gui/lib/api/rag.ts`
+
+**Configuration (rag_module/config.py):**
 ```python
-# In app/services/ai_responses.py
-async def generate_response(user_id: int, query: str):
-    # Get context from RAG
-    result = rag_pipeline.process_message(str(user_id), query)
-
-    # Send to LLM
-    llm_response = await llm.generate(result['prompt'])
-
-    # Store exchange
-    rag_pipeline.store_exchange(str(user_id), query, llm_response)
-
-    return llm_response
+MODEL_PATH = "models/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+MODEL_MAX_OUTPUT_TOKENS = 500  # Increased for better quality
+MODEL_TEMPERATURE = 0.7
+MODEL_TOP_P = 0.9
+MODEL_TOP_K = 40
+CACHE_TTL_SECONDS = 86400  # 24 hours
 ```
+
+**Testing:**
+```bash
+# Test query (via frontend or API)
+POST /api/v1/rag/query
+{
+  "message": "What database did we decide to use?",
+  "use_cache": true,
+  "auto_store": false,
+  "max_tokens": 500
+}
+
+# Returns:
+{
+  "response": "We decided to use PostgreSQL with SQLAlchemy ORM...",
+  "retrieval_latency_ms": 45.2,
+  "llm_latency_ms": 3421.5,
+  "total_latency_ms": 3466.7,
+  "tokens_generated": 67,
+  "cached": false,
+  "context_items": 3
+}
+```
+
+**Documentation:**
+- `rag_module/LLM_INTEGRATION.md` - Complete LLM integration guide
+- `rag_module/QUICKSTART_LLM.md` - Quick start for LLM features
 
 ### Known Issues
 
