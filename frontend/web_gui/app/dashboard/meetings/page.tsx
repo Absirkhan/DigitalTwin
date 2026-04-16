@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { meetingService } from '@/lib/api';
 import { useAutoSync } from '@/hooks/useAutoSync';
 import type { Meeting, MeetingCreate, JoinMeetingRequest } from '@/lib/api/types';
+import BotSpeakingWarning from '@/app/components/BotSpeakingWarning';
 
 // Meeting Card Component
 function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete: (id: number) => void }) {
@@ -96,7 +97,28 @@ function MeetingCard({ meeting, onDelete }: { meeting: Meeting; onDelete: (id: n
           </h4>
           <div className="flex items-center gap-2">
             {getStatusBadge(meeting.status)}
-            
+
+            {/* Bot Response Badge */}
+            {meeting.bot_response_enabled && (
+              <span
+                className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium"
+                style={{
+                  backgroundColor: meeting.bot_response_count && meeting.bot_response_count > 0
+                    ? 'var(--status-active-bg)'
+                    : 'var(--status-scheduled-bg)',
+                  color: meeting.bot_response_count && meeting.bot_response_count > 0
+                    ? 'var(--status-active-text)'
+                    : 'var(--status-scheduled-text)'
+                }}
+                title={`Bot speaking: ${meeting.bot_response_count || 0} / ${meeting.bot_max_responses || 10} responses`}
+              >
+                <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z" clipRule="evenodd" />
+                </svg>
+                {meeting.bot_response_count || 0}/{meeting.bot_max_responses || 10}
+              </span>
+            )}
+
             {/* Delete button on hover */}
             <button
               onClick={(e) => {
@@ -168,6 +190,9 @@ export default function MeetingsPage() {
     scheduled_time: new Date().toISOString(),
     duration_minutes: 60,
     auto_join: false,
+    bot_response_enabled: false,
+    bot_response_style: 'professional',
+    bot_max_responses: 10,
   });
   const [joinUrl, setJoinUrl] = useState('');
   const [joinConfig, setJoinConfig] = useState<JoinMeetingRequest>({
@@ -229,6 +254,9 @@ export default function MeetingsPage() {
         scheduled_time: new Date().toISOString(),
         duration_minutes: 60,
         auto_join: false,
+        bot_response_enabled: false,
+        bot_response_style: 'professional',
+        bot_max_responses: 10,
       });
       // Auto-sync will pick up the new meeting automatically
       forceSync();
@@ -561,6 +589,81 @@ export default function MeetingsPage() {
                       <label htmlFor="auto_join" className="block text-sm text-foreground">
                         Auto-join meeting with bot
                       </label>
+                    </div>
+
+                    {/* Bot Speaking Section */}
+                    <div className="border-t pt-4 mt-4" style={{ borderColor: 'var(--border-primary)' }}>
+                      <h4 className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)' }}>
+                        Bot Speaking Settings (Experimental)
+                      </h4>
+
+                      {/* Enable Bot Speaking Toggle */}
+                      <div className="flex items-center gap-2 mb-4">
+                        <input
+                          type="checkbox"
+                          id="bot_response_enabled"
+                          checked={newMeeting.bot_response_enabled}
+                          onChange={(e) => setNewMeeting({ ...newMeeting, bot_response_enabled: e.target.checked })}
+                          className="h-4 w-4 text-primary focus:ring-primary border-border rounded"
+                        />
+                        <label htmlFor="bot_response_enabled" className="block text-sm font-medium text-foreground">
+                          Enable bot to respond when directly addressed
+                        </label>
+                      </div>
+
+                      {/* Bot Speaking Configuration (shown when enabled) */}
+                      {newMeeting.bot_response_enabled && (
+                        <div className="space-y-4 ml-6 pl-4 border-l-2" style={{ borderColor: 'var(--orange-primary)' }}>
+                          {/* Response Style */}
+                          <div>
+                            <label htmlFor="bot_response_style" className="block text-sm font-medium text-foreground mb-1">
+                              Response Style
+                            </label>
+                            <select
+                              id="bot_response_style"
+                              value={newMeeting.bot_response_style}
+                              onChange={(e) => setNewMeeting({ ...newMeeting, bot_response_style: e.target.value })}
+                              className="input w-full"
+                            >
+                              <option value="professional">Professional (40 words max)</option>
+                              <option value="casual">Casual (35 words max)</option>
+                              <option value="technical">Technical (60 words max)</option>
+                              <option value="brief">Brief (15 words max)</option>
+                            </select>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              How the bot should communicate in meetings
+                            </p>
+                          </div>
+
+                          {/* Max Responses */}
+                          <div>
+                            <label htmlFor="bot_max_responses" className="block text-sm font-medium text-foreground mb-1">
+                              Maximum Responses: {newMeeting.bot_max_responses}
+                            </label>
+                            <input
+                              type="range"
+                              id="bot_max_responses"
+                              min="1"
+                              max="50"
+                              value={newMeeting.bot_max_responses}
+                              onChange={(e) => setNewMeeting({ ...newMeeting, bot_max_responses: parseInt(e.target.value) })}
+                              className="w-full"
+                            />
+                            <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                              <span>1</span>
+                              <span>50</span>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Limit bot responses per meeting (30-second cooldown between responses)
+                            </p>
+                          </div>
+
+                          {/* Warning Component */}
+                          <div className="mt-4">
+                            <BotSpeakingWarning variant="compact" />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>

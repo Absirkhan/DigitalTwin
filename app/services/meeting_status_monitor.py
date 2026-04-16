@@ -188,31 +188,38 @@ class MeetingStatusMonitor:
                             # Import RAG service
                             from app.services.rag_service import rag_service
 
-                            # Determine user's name in transcript
-                            user_name = user.full_name or user.email.split('@')[0]
-                            bot_name = user.bot_name or f"{user_name}'s Bot"
-
-                            # Store transcript in RAG
-                            logger.info(f"📝 Storing transcript in RAG for meeting {meeting.id}...")
-
-                            result = await rag_service.store_meeting_transcript(
-                                user_id=str(meeting.user_id),
-                                bot_id=bot.bot_id,
-                                user_name=user_name,
-                                bot_name=bot_name
-                            )
-
-                            if result.get('success'):
-                                logger.info(
-                                    f"✅ Stored {result['total_exchanges_stored']} transcript "
-                                    f"exchanges in RAG for meeting {meeting.id} "
-                                    f"({len(result['speakers'])} speakers: {', '.join(result['speakers'])})"
+                            # Check if RAG service is initialized before attempting storage
+                            if not rag_service._initialized:
+                                logger.warning(
+                                    f"⚠️ RAG service not initialized - skipping transcript storage "
+                                    f"for meeting {meeting.id}"
                                 )
                             else:
-                                logger.warning(
-                                    f"⚠️ Failed to store transcript in RAG for meeting {meeting.id}: "
-                                    f"{result.get('error', 'Unknown error')}"
+                                # Determine user's name in transcript
+                                user_name = user.full_name or user.email.split('@')[0]
+                                bot_name = user.bot_name or f"{user_name}'s Bot"
+
+                                # Store transcript in RAG
+                                logger.info(f"📝 Storing transcript in RAG for meeting {meeting.id}...")
+
+                                result = await rag_service.store_meeting_transcript(
+                                    user_id=str(meeting.user_id),
+                                    bot_id=bot.bot_id,
+                                    user_name=user_name,
+                                    bot_name=bot_name
                                 )
+
+                                if result.get('success'):
+                                    logger.info(
+                                        f"✅ Stored {result['total_exchanges_stored']} transcript "
+                                        f"exchanges in RAG for meeting {meeting.id} "
+                                        f"({len(result['speakers'])} speakers: {', '.join(result['speakers'])})"
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"⚠️ Failed to store transcript in RAG for meeting {meeting.id}: "
+                                        f"{result.get('error', 'Unknown error')}"
+                                    )
                         else:
                             logger.warning(f"⚠️ User {meeting.user_id} not found for RAG storage")
 

@@ -157,6 +157,21 @@ export const put = <T>(
 };
 
 /**
+ * PATCH request
+ */
+export const patch = <T>(
+  endpoint: string,
+  data?: unknown,
+  options?: RequestOptions
+): Promise<T> => {
+  return apiRequest<T>(endpoint, {
+    ...options,
+    method: 'PATCH',
+    body: data ? JSON.stringify(data) : undefined,
+  });
+};
+
+/**
  * DELETE request
  */
 export const del = <T>(endpoint: string, options?: RequestOptions): Promise<T> => {
@@ -167,6 +182,7 @@ export default {
   get,
   post,
   put,
+  patch,
   delete: del,
   getAuthToken,
   setAuthToken,

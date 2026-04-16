@@ -12,7 +12,8 @@ from app.api.v1.endpoints import (
     summarization,
     realtime,
     tts,
-    rag
+    rag,
+    bot_speaking
 )
 
 api_router = APIRouter()
@@ -25,3 +26,4 @@ api_router.include_router(summarization.router, prefix="/summarization", tags=["
 api_router.include_router(realtime.router, prefix="/realtime", tags=["realtime"])
 api_router.include_router(tts.router, prefix="/tts", tags=["text-to-speech"])
 api_router.include_router(rag.router, prefix="/rag", tags=["rag"])
+api_router.include_router(bot_speaking.router, prefix="/bot-speaking", tags=["bot-speaking"])

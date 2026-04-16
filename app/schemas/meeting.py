@@ -51,6 +51,9 @@ class MeetingCreate(BaseModel):
     scheduled_time: datetime
     duration_minutes: Optional[int] = 60
     auto_join: Optional[bool] = True
+    bot_response_enabled: Optional[bool] = False
+    bot_response_style: Optional[str] = "professional"
+    bot_max_responses: Optional[int] = 9999
 
 
 class MeetingUpdate(BaseModel):
@@ -61,6 +64,9 @@ class MeetingUpdate(BaseModel):
     duration_minutes: Optional[int] = None
     auto_join: Optional[bool] = None
     status: Optional[str] = None
+    bot_response_enabled: Optional[bool] = None
+    bot_response_style: Optional[str] = None
+    bot_max_responses: Optional[int] = None
 
 
 class MeetingJoinRequest(BaseModel):
@@ -90,6 +96,10 @@ class MeetingResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     bot_id: Optional[str] = None  # Added for Recall API response
+    bot_response_enabled: bool = False
+    bot_response_style: str = "professional"
+    bot_response_count: int = 0
+    bot_max_responses: int = 9999
 
     class Config:
         from_attributes = True

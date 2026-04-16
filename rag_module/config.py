@@ -27,35 +27,42 @@ class RAGConfig:
     # Context window size (must match prompt builder budget)
     MODEL_CONTEXT_SIZE = int(os.getenv("RAG_MODEL_CONTEXT_SIZE", "2150"))
 
-    # Maximum tokens to generate in response (increased for better quality)
-    MODEL_MAX_OUTPUT_TOKENS = int(os.getenv("RAG_MODEL_MAX_TOKENS", "500"))
+    # Maximum tokens to generate in response (lowered to 30 for enforced brevity)
+    MODEL_MAX_OUTPUT_TOKENS = int(os.getenv("RAG_MODEL_MAX_TOKENS", "30"))
 
-    # Temperature (0.0 = deterministic, 1.0 = creative)
-    MODEL_TEMPERATURE = float(os.getenv("RAG_MODEL_TEMPERATURE", "0.7"))
+    # Temperature (0.1-0.3 = factual/deterministic, reduced from 0.7 to prevent hallucinations)
+    MODEL_TEMPERATURE = float(os.getenv("RAG_MODEL_TEMPERATURE", "0.2"))
 
     # Top-p nucleus sampling (0.9 = use top 90% probability mass)
     MODEL_TOP_P = float(os.getenv("RAG_MODEL_TOP_P", "0.9"))
 
-    # Top-k sampling (0 = disabled, 40 = use top 40 tokens)
-    MODEL_TOP_K = int(os.getenv("RAG_MODEL_TOP_K", "40"))
+    # Top-k sampling (20 = more focused, reduced from 40 to prevent rambling)
+    MODEL_TOP_K = int(os.getenv("RAG_MODEL_TOP_K", "20"))
 
-    # Number of CPU threads for inference
+    # Number of CPU threads for inference (tunable for performance)
+    # Recommended: 4-8 for most CPUs, higher for CPUs with many cores
+    # Set to 0 to auto-detect optimal thread count
     MODEL_CPU_THREADS = int(os.getenv("RAG_MODEL_CPU_THREADS", "4"))
 
     # GPU layers to offload (0 = CPU only)
     MODEL_GPU_LAYERS = int(os.getenv("RAG_MODEL_GPU_LAYERS", "0"))
 
-    # Stop sequences (stop generating when these appear)
+    # Stop sequences (Qwen2.5 ChatML + generic fallbacks)
+    # Critical: <|im_end|> prevents model from continuing past assistant response
+    # <|im_start|>user prevents multi-turn hallucinations
     MODEL_STOP_SEQUENCES = [
-        "User:",
-        "\n\n\n",
-        "###",
-        "[INST]",
-        "[/INST]"
+        "<|im_end|>",           # Primary Qwen2.5 stop token
+        "<|im_start|>user",     # Prevents generating fake user messages
+        "<|im_start|>system",   # Prevents system prompt leakage
+        "\nUser:",              # Generic fallback
+        "\nQuestion:",          # Prevent looping back to question
+        "\n\n\n",               # Excessive newlines
+        "---"                   # Common separator hallucination
     ]
 
-    # Repeat penalty (1.0 = no penalty, 1.1 = slight penalty)
-    MODEL_REPEAT_PENALTY = float(os.getenv("RAG_MODEL_REPEAT_PENALTY", "1.1"))
+    # Repeat penalty (1.15 = stronger penalty, increased from 1.1 to reduce repetition/loops)
+    # Note: llama-cpp doesn't support frequency_penalty, so we compensate with higher repeat_penalty
+    MODEL_REPEAT_PENALTY = float(os.getenv("RAG_MODEL_REPEAT_PENALTY", "1.15"))
 
     # ═══════════════════════════════════════════════════════════════════
     # Cache Settings

@@ -121,15 +121,15 @@ class PromptBuilder:
         Returns:
             System prompt string
         """
-        # Simplified prompt for small LLMs - direct and clear instructions
-        base_prompt = """You are a helpful assistant. Answer questions directly using the provided context.
+        # Optimized prompt for Qwen2.5-0.5B with metadata scrubbing
+        base_prompt = """You are a concise assistant. Answer in 1-2 short sentences using ONLY the provided context.
 
-INSTRUCTIONS:
-1. Use ONLY information from "Past conversations" section if provided
-2. Give direct, specific answers (avoid vague responses)
-3. If the context contains the answer, extract it clearly
-4. If no relevant context, say "I don't have information about that"
-5. Keep answers concise (2-3 sentences)"""
+RULES:
+1. Ignore speaker names (like "Absir:", "User:") and timestamps in context
+2. Extract the core information only
+3. If context doesn't answer the question, say "I don't have that information"
+4. Do NOT repeat the context verbatim
+5. Be direct and specific"""
 
         # Skip style summary for small models - reduces confusion
         # if style_summary:
@@ -222,18 +222,40 @@ INSTRUCTIONS:
             truncated_context = self._truncate_to_budget(retrieved_context, remaining_budget)
             tokens_context = self.count_tokens(truncated_context)
 
-        # Assemble final prompt - simplified structure for small LLMs
-        prompt_parts = [system_prompt]
+        # Assemble final prompt using Qwen2.5 ChatML format
+        # Format: <|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{context + user}<|im_end|>\n<|im_start|>assistant\n
 
+        prompt_parts = []
+
+        # System message with ChatML tokens
+        prompt_parts.append(f"<|im_start|>system\n{system_prompt}<|im_end|>")
+
+        # User message with session history AND context (layered for conversational capability)
+        user_content_parts = []
+
+        # Layer 1: Session history (recent conversation context for follow-up questions)
+        if truncated_history:
+            user_content_parts.append(f"Recent conversation:\n{truncated_history}")
+
+        # Layer 2: Retrieved context (past meetings/documents from FAISS)
         if truncated_context:
-            prompt_parts.append(f"\n---\nPast conversations:\n{truncated_context}\n---")
+            user_content_parts.append(f"Past information:\n{truncated_context}")
 
-        # Skip session history for small models - reduces noise
-        # if truncated_history:
-        #     prompt_parts.append(f"\nCurrent session:\n{truncated_history}")
+        # Layer 3: Current question
+        if user_content_parts:
+            # We have context, so format as "Question:"
+            user_content_parts.append(f"Question: {user_message}")
+        else:
+            # No context, just use the message directly
+            user_content_parts.append(user_message)
 
-        # Clear separation between context and question
-        prompt_parts.append(f"\nQuestion: {user_message}\nAnswer:")
+        # Combine all parts
+        user_content = "\n\n".join(user_content_parts)
+
+        prompt_parts.append(f"<|im_start|>user\n{user_content}<|im_end|>")
+
+        # Assistant turn starter
+        prompt_parts.append("<|im_start|>assistant")
 
         full_prompt = "\n".join(prompt_parts)
 

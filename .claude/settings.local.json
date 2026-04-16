@@ -28,7 +28,12 @@
       "Bash(timeout 40 echo:*)",
       "Bash(timeout 60 echo:*)",
       "Bash(timeout 90 echo:*)",
-      "Bash(timeout 120 ./venv/Scripts/python.exe:*)"
+      "Bash(timeout 120 ./venv/Scripts/python.exe:*)",
+      "Bash(cat:*)",
+      "Bash(npm run build:*)",
+      "Bash(dir:*)",
+      "Bash(npm install:*)",
+      "Bash(timeout 120 python:*)"
     ],
     "deny": [],
     "ask": []

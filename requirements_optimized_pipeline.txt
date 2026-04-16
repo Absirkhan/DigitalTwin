@@ -1,0 +1,24 @@
+# Optimized Pipeline Requirements
+# Add these to your main requirements.txt
+
+# Piper TTS (ultra-fast CPU synthesis)
+piper-tts>=1.2.0
+
+# Audio processing
+pydub>=0.25.1
+
+# FFmpeg (required by pydub for MP3 conversion)
+# Note: This is a system dependency, not a Python package
+# Windows: Download from https://ffmpeg.org/download.html
+# Linux: sudo apt-get install ffmpeg
+# Mac: brew install ffmpeg
+
+# Existing dependencies (ensure these versions or higher)
+llama-cpp-python>=0.2.0  # Streaming support required
+redis>=5.0.0
+aiohttp>=3.9.0
+asyncio
+numpy>=1.24.0
+
+# Optional: Performance monitoring
+psutil>=5.9.0  # For CPU/memory monitoring during optimization

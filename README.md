@@ -9,13 +9,17 @@ DigitalTwin is an intelligent meeting automation platform built as a Final Year 
 - 🤖 **Automated Meeting Bots** - AI bots that join meetings via Recall.ai
 - 📹 **Video Recording & Storage** - High-quality MP4 recordings with local storage
 - 📝 **Meeting Transcriptions** - Real-time transcript generation and formatting
-- ⚡ **Real-Time WebSocket Transcription** - Live transcript streaming with <100ms latency
+- ⚡ **Real-Time WebSocket Transcription** - Live transcript streaming with ~600ms latency
 - 🧠 **AI Summarization** - Custom fine-tuned FLAN-T5 model for meeting summaries
-- 🎤 **Voice Cloning & TTS** - Neural voice cloning with NeuTTS Nano for personalized bot responses
+- 🎤 **Voice Cloning & TTS** - Neural voice cloning with NeuTTS Nano (<50ms cached responses)
+- 🤖 **RAG/LLM Integration** - Qwen2.5-0.5B LLM with FAISS vector search (83% accuracy)
+- 💬 **Conversational Bot** - Session memory for follow-up questions and multi-turn conversations
+- 🧪 **Bot Response Tester** - Offline testing endpoint for bot responses without joining meetings
 - 📅 **Google Calendar Integration** - OAuth-based calendar synchronization
 - 🔐 **Secure Authentication** - Google OAuth 2.0 implementation
 - 🗄️ **Database Management** - PostgreSQL with comprehensive schema
 - 📊 **Meeting Analytics** - Transcript statistics and processing
+- 🎯 **Voice Injection** - Bot can speak in meetings via MP3 audio injection
 
 ### 🔮 Planned Features
 

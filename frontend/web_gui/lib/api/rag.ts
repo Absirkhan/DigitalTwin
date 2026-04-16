@@ -91,6 +91,49 @@ export async function endSession(): Promise<{
   }>('/api/v1/rag/session/end');
 }
 
+export interface ResponseCheckRequest {
+  trigger_text: string;
+  bot_name?: string;
+  response_style?: string;
+  simulate_filler?: boolean;
+  use_cache?: boolean;
+}
+
+export interface ResponseCheckChunk {
+  chunk_number: number;
+  text: string;
+  tts_latency_ms: number;
+  audio_size_bytes: number;
+  audio_duration_seconds: number;
+}
+
+export interface ResponseCheckResponse {
+  detected: boolean;
+  detection_reason?: string;
+  extracted_query?: string;
+  filler_category?: string;
+  filler_text?: string;
+  filler_latency_ms?: number;
+  rag_context_items?: number;
+  rag_retrieval_ms?: number;
+  llm_response?: string;
+  llm_tokens?: number;
+  llm_latency_ms?: number;
+  response_chunks?: ResponseCheckChunk[];
+  total_pipeline_ms?: number;
+  perceived_latency_ms?: number;
+  cached: boolean;
+}
+
+/**
+ * Check bot response simulation (test without joining meeting)
+ */
+export async function checkBotResponse(
+  request: ResponseCheckRequest
+): Promise<ResponseCheckResponse> {
+  return await post<ResponseCheckResponse>('/api/v1/rag/response-check', request);
+}
+
 /**
  * Manually store a meeting transcript in RAG
  */
