@@ -16,7 +16,7 @@ class BotResponse(BaseModel):
     video_download_url: Optional[str] = None
     transcript_url: Optional[str] = None
     meeting_id: Optional[int] = None
-    recording_status: str = "pending"
+    recording_status: Optional[str] = "pending"  # Allow None
     recording_data: Optional[Dict[str, Any]] = None
     video_recording_url: Optional[str] = None
     recording_expires_at: Optional[datetime] = None
@@ -36,7 +36,7 @@ class BotDetailResponse(BaseModel):
     video_download_url: Optional[str] = None
     transcript_url: Optional[str] = None
     meeting_id: Optional[int] = None
-    recording_status: str = "pending"
+    recording_status: Optional[str] = "pending"  # Allow None
     recording_data: Optional[Dict[str, Any]] = None
     video_recording_url: Optional[str] = None
     recording_expires_at: Optional[datetime] = None

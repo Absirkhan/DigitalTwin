@@ -36,6 +36,14 @@ class Meeting(Base):
     calendar_id = Column(String)
     calendar_event_id = Column(String)
 
+    # Bot speaking settings
+    bot_name = Column(String, nullable=True)  # Optional: override user's default bot name for this meeting
+    bot_response_style = Column(String(20), default="professional", nullable=False)
+    bot_response_enabled = Column(Boolean, default=True, nullable=False)  # Enabled by default, user can toggle off in UI
+    bot_response_count = Column(Integer, default=0, nullable=False)
+    bot_max_responses = Column(Integer, default=9999, nullable=False)  # Effectively unlimited for testing
+
     # Relationships
     user = relationship("User", back_populates="meetings")
     bots = relationship("Bot", back_populates="meeting")
+    bot_responses = relationship("BotResponse", back_populates="meeting", cascade="all, delete-orphan")

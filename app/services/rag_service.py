@@ -81,10 +81,17 @@ class RAGService:
             logger.info(f"Model path from config: {model_path}")
             logger.info(f"Model file exists: {Path(model_path).exists()}")
 
+            if not Path(model_path).exists():
+                logger.error(f"❌ Model file not found: {model_path}")
+                logger.error("   RAG/LLM features will be disabled")
+                self._initialized = False
+                return
+
             # Initialize pipeline with LLM enabled
             base_path = str(RAG_MODULE_PATH / "data" / "users")
             logger.info(f"User data path: {base_path}")
 
+            logger.info("Loading RAG pipeline (this may take 10-30s)...")
             self._pipeline = RAGPipeline(base_path=base_path, enable_llm=True)
 
             # Check if LLM is available
@@ -95,22 +102,36 @@ class RAGService:
 
                 # Pre-warm the model by generating a test response
                 logger.info("Pre-warming LLM model (this may take 10-30s on first load)...")
-                await asyncio.get_event_loop().run_in_executor(
-                    None,
-                    self._prewarm_llm
-                )
-                logger.info("✅ LLM model pre-warmed and ready")
+
+                # Use asyncio.wait_for with timeout to prevent hanging
+                try:
+                    await asyncio.wait_for(
+                        asyncio.get_event_loop().run_in_executor(
+                            None,
+                            self._prewarm_llm
+                        ),
+                        timeout=30.0  # 30 second timeout (model already loaded)
+                    )
+                    logger.info("✅ LLM model pre-warmed and ready")
+                except asyncio.TimeoutError:
+                    logger.warning("⚠️ LLM pre-warming timed out after 30s")
+                    logger.warning("   First query may be slower than expected")
+                    # Still mark as initialized since pipeline is loaded
+                    pass
             else:
                 logger.warning("⚠️ RAG pipeline initialized WITHOUT LLM support")
                 if self._pipeline.llm_generator is None:
                     logger.warning("   LLM generator is None - check model file and llama-cpp-python installation")
 
             self._initialized = True
+            logger.info("✅ RAG service initialization complete")
 
         except Exception as e:
             logger.error(f"❌ Failed to initialize RAG service: {e}", exc_info=True)
+            logger.error("   RAG/LLM features will be disabled")
             # Don't raise - allow app to start even if RAG fails
             self._initialized = False
+            self._llm_available = False
 
     def _prewarm_llm(self):
         """Synchronous pre-warming helper (runs in thread pool)."""
@@ -283,7 +304,7 @@ class RAGService:
         bot_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Fetch meeting transcript from Recall.ai and store in RAG.
+        Fetch meeting transcript from formatted endpoint and store in RAG.
 
         Stores each speaker's dialogue as a separate exchange for fine-grained
         context retrieval.
@@ -305,62 +326,104 @@ class RAGService:
             raise RuntimeError("RAG service not initialized. Call initialize() first.")
 
         try:
-            # Import recall service
-            from app.services.recall_service import recall_service
+            # Import HTTP client for internal API call
+            import httpx
+            from app.core.database import AsyncSessionLocal
+            from app.models.bot import Bot
 
-            logger.info(f"Fetching transcript for bot {bot_id}...")
+            logger.info(f"Fetching formatted transcript for bot {bot_id}...")
 
-            # Fetch transcript from Recall.ai
-            transcript_chunks = await recall_service.get_transcript(bot_id)
+            # Get bot from database to verify user ownership
+            db = AsyncSessionLocal()
+            try:
+                from sqlalchemy import select
+                result = await db.execute(
+                    select(Bot).filter(Bot.bot_id == bot_id)
+                )
+                bot = result.scalar_one_or_none()
 
-            if not transcript_chunks:
+                if not bot or bot.user_id != int(user_id):
+                    logger.error(f"Bot {bot_id} not found or doesn't belong to user {user_id}")
+                    return {
+                        "success": False,
+                        "error": "Bot not found or access denied",
+                        "total_exchanges_stored": 0,
+                        "speakers": []
+                    }
+
+                # Get user's email for JWT token (needed for internal API call)
+                from app.models.user import User
+                result = await db.execute(
+                    select(User).filter(User.id == int(user_id))
+                )
+                user = result.scalar_one_or_none()
+
+                if not user:
+                    logger.error(f"User {user_id} not found")
+                    return {
+                        "success": False,
+                        "error": "User not found",
+                        "total_exchanges_stored": 0,
+                        "speakers": []
+                    }
+
+                # Create JWT token with correct format (sub = email)
+                from app.services.auth import create_access_token
+                access_token = create_access_token(data={"sub": user.email})
+
+            finally:
+                await db.close()
+
+            # Call the formatted transcript endpoint (internal API call)
+            base_url = "http://localhost:8000"  # Internal call
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.get(
+                    f"{base_url}/api/v1/meetings/bot/{bot_id}/transcript/formatted",
+                    headers={"Authorization": f"Bearer {access_token}"}
+                )
+
+                if response.status_code != 200:
+                    error_msg = f"Failed to fetch transcript: {response.status_code} - {response.text}"
+                    logger.error(error_msg)
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "total_exchanges_stored": 0,
+                        "speakers": []
+                    }
+
+                data = response.json()
+
+            # Extract speaker dialogues from formatted transcript
+            formatted_transcript = data.get("formatted_transcript", {})
+            speaker_dialogues = formatted_transcript.get("speaker_dialogues", [])
+
+            if not speaker_dialogues:
                 return {
                     "success": False,
-                    "error": "No transcript found or transcript is empty",
+                    "error": "No speaker dialogues found in transcript",
                     "total_exchanges_stored": 0,
                     "speakers": []
                 }
 
-            # Group consecutive messages from same speaker
+            # Convert to speaker segments format
             speaker_segments = []
-            current_speaker = None
-            current_text = []
             speakers_set = set()
 
-            for chunk in transcript_chunks:
-                speaker = chunk.get("speaker", "Unknown")
-                text = chunk.get("text", "").strip()
+            for dialogue in speaker_dialogues:
+                speaker = dialogue.get("speaker", "Unknown")
+                text = dialogue.get("text", "").strip()
 
                 if not text:
                     continue
 
                 speakers_set.add(speaker)
-
-                if speaker == current_speaker:
-                    # Same speaker, append to current segment
-                    current_text.append(text)
-                else:
-                    # New speaker, save previous segment
-                    if current_speaker and current_text:
-                        speaker_segments.append({
-                            "speaker": current_speaker,
-                            "text": " ".join(current_text)
-                        })
-
-                    # Start new segment
-                    current_speaker = speaker
-                    current_text = [text]
-
-            # Save final segment
-            if current_speaker and current_text:
                 speaker_segments.append({
-                    "speaker": current_speaker,
-                    "text": " ".join(current_text)
+                    "speaker": speaker,
+                    "text": text
                 })
 
-            # Store each segment in RAG (Option B: speaker dialogues as exchanges)
-            exchanges_stored = 0
-
+            # Store each segment in RAG
             await asyncio.get_event_loop().run_in_executor(
                 None,
                 self._store_segments_sync,
@@ -391,16 +454,25 @@ class RAGService:
             }
 
     def _store_segments_sync(self, user_id: str, segments: List[Dict[str, str]]):
-        """Synchronous segment storage (runs in thread pool)."""
+        """
+        Synchronous segment storage (runs in thread pool).
+
+        Stores meeting transcript segments as searchable exchanges.
+        Both user_message and assistant_response contain the full speaker text
+        for better retrieval (since these are transcripts, not Q&A pairs).
+        """
         for segment in segments:
             speaker = segment["speaker"]
             text = segment["text"]
 
-            # Store as exchange: user_message = "{speaker}: {text}", assistant_response = "context"
+            # Store the full speaker dialogue in both fields for maximum retrieval relevance
+            # Format: "Speaker: Their actual words"
+            formatted_text = f"{speaker}: {text}"
+
             self._pipeline.store_exchange(
                 user_id=user_id,
-                user_message=f"{speaker}: {text}",
-                assistant_response="context"  # Minimal placeholder
+                user_message=formatted_text,
+                assistant_response=formatted_text  # Store actual content, not "context"
             )
 
     async def get_user_stats(self, user_id: str) -> Dict[str, Any]:

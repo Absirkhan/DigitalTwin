@@ -38,18 +38,18 @@ class SimpleAutoJoinScheduler:
             join_window_start = pakistan_now
             join_window_end = pakistan_now + timedelta(minutes=settings.AUTO_JOIN_ADVANCE_MINUTES)
 
-            logger.info(f"🇵🇰 Pakistan time: {pakistan_now.strftime('%Y-%m-%d %H:%M:%S')} (PKT)")
-            logger.info(f"🔍 Checking for meetings between {join_window_start.strftime('%H:%M:%S')} and {join_window_end.strftime('%H:%M:%S')} PKT")
+            logger.info(f"[PKT] Pakistan time: {pakistan_now.strftime('%Y-%m-%d %H:%M:%S')} (PKT)")
+            logger.info(f"[SEARCH] Checking for meetings between {join_window_start.strftime('%H:%M:%S')} and {join_window_end.strftime('%H:%M:%S')} PKT")
 
             # Debug: Show all auto-join enabled meetings
             all_auto_join_meetings = db.query(Meeting).filter(
                 Meeting.auto_join == True
             ).all()
 
-            logger.info(f"📊 Total auto-join enabled meetings in DB: {len(all_auto_join_meetings)}")
+            logger.info(f"[STATS] Total auto-join enabled meetings in DB: {len(all_auto_join_meetings)}")
             for meeting in all_auto_join_meetings:
                 # Treat scheduled_time as Pakistan time (naive)
-                logger.info(f"  📅 Meeting {meeting.id}: '{meeting.title}' at {meeting.scheduled_time.strftime('%Y-%m-%d %H:%M:%S')} PKT (Pakistan time)")
+                logger.info(f"  [MEETING] Meeting {meeting.id}: '{meeting.title}' at {meeting.scheduled_time.strftime('%Y-%m-%d %H:%M:%S')} PKT (Pakistan time)")
                 logger.info(f"      Status: {meeting.status}, Digital Twin ID: {meeting.digital_twin_id}")
 
             # Find meetings that need auto-joining (Pakistan time logic)
@@ -63,7 +63,7 @@ class SimpleAutoJoinScheduler:
                 )
             ).all()
 
-            logger.info(f"🎯 Found {len(meetings_to_join)} meetings ready to auto-join")
+            logger.info(f"[TARGET] Found {len(meetings_to_join)} meetings ready to auto-join")
             for meeting in meetings_to_join:
                 try:
                     await self.join_meeting(meeting, db)
@@ -102,7 +102,7 @@ class SimpleAutoJoinScheduler:
             
             # Call the recall service directly for auto-join (internal process)
             try:
-                logger.info(f"🔌 Calling Recall service for meeting URL: {meeting.meeting_url}")
+                logger.info(f"[CONNECT] Calling Recall service for meeting URL: {meeting.meeting_url}")
                 
                 # Create the join request with user's profile settings
                 join_request = MeetingJoinRequest(
@@ -117,7 +117,7 @@ class SimpleAutoJoinScheduler:
                 from app.services.recall_service import recall_service
                 response = await recall_service.join_meeting(join_request)
                 
-                logger.info(f"📡 Recall service response: success={response.success}")
+                logger.info(f"[RESPONSE] Recall service response: success={response.success}")
                 
                 # Check if response is successful
                 if response.success and response.bot_id:
@@ -141,18 +141,18 @@ class SimpleAutoJoinScheduler:
                         existing_bot.user_id = meeting.user_id  # Ensure correct user_id
                     
                     db.commit()
-                    logger.info(f"✅ Successfully auto-joined meeting {meeting.id} with bot {response.bot_id}")
+                    logger.info(f"[SUCCESS] Successfully auto-joined meeting {meeting.id} with bot {response.bot_id}")
                     
                     # Schedule automatic meeting completion check
                     if meeting.end_time:
                         try:
                             from app.api.v1.endpoints.meetings import schedule_meeting_completion_check
                             schedule_meeting_completion_check(response.bot_id, meeting.end_time)
-                            logger.info(f"⏰ Scheduled completion check for bot {response.bot_id} at {meeting.end_time}")
+                            logger.info(f"[SCHEDULED] Scheduled completion check for bot {response.bot_id} at {meeting.end_time}")
                         except Exception as schedule_error:
-                            logger.warning(f"⚠️ Failed to schedule completion check: {schedule_error}")
+                            logger.warning(f"[WARNING] Failed to schedule completion check: {schedule_error}")
                     else:
-                        logger.warning(f"⚠️ Meeting {meeting.id} has no end_time, cannot schedule completion check")
+                        logger.warning(f"[WARNING] Meeting {meeting.id} has no end_time, cannot schedule completion check")
                     
                 else:
                     # Handle failed response
@@ -162,13 +162,13 @@ class SimpleAutoJoinScheduler:
                     meeting.status = "scheduled"
                     db.commit()
                     
-                    logger.error(f"❌ Failed to auto-join meeting {meeting.id}: {error_msg}")
+                    logger.error(f"[ERROR] Failed to auto-join meeting {meeting.id}: {error_msg}")
                     
             except Exception as api_error:
                 # Handle API call exceptions
                 meeting.status = "scheduled"
                 db.commit()
-                logger.error(f"❌ Recall service error for meeting {meeting.id}: {str(api_error)}")
+                logger.error(f"[ERROR] Recall service error for meeting {meeting.id}: {str(api_error)}")
                 
                 # Log more details about the error
                 if "validation" in str(api_error).lower():
@@ -179,7 +179,7 @@ class SimpleAutoJoinScheduler:
                     logger.error(f"   Unexpected error: {type(api_error).__name__}")
             
         except Exception as e:
-            logger.error(f"❌ Auto-join failed for meeting {meeting.id}: {str(e)}")
+            logger.error(f"[ERROR] Auto-join failed for meeting {meeting.id}: {str(e)}")
             
             # Reset meeting status on error
             meeting.status = "scheduled"
@@ -189,10 +189,10 @@ class SimpleAutoJoinScheduler:
         """Main scheduler loop"""
         self.running = True
         pakistan_now = datetime.now(PAKISTAN_TZ)
-        logger.info("🤖 Simple Auto-Join Scheduler Started")
-        logger.info(f"🇵🇰 Pakistan Time: {pakistan_now.strftime('%Y-%m-%d %H:%M:%S')} (UTC+5)")
-        logger.info(f"⏰ Checking every {settings.AUTO_JOIN_CHECK_INTERVAL} seconds")
-        logger.info(f"🎯 Joining meetings {settings.AUTO_JOIN_ADVANCE_MINUTES} minutes before start time")
+        logger.info("[BOT] Simple Auto-Join Scheduler Started")
+        logger.info(f"[PKT] Pakistan Time: {pakistan_now.strftime('%Y-%m-%d %H:%M:%S')} (UTC+5)")
+        logger.info(f"[TIMER] Checking every {settings.AUTO_JOIN_CHECK_INTERVAL} seconds")
+        logger.info(f"[CONFIG] Joining meetings {settings.AUTO_JOIN_ADVANCE_MINUTES} minutes before start time")
         
         try:
             while self.running:
@@ -200,9 +200,9 @@ class SimpleAutoJoinScheduler:
                 await asyncio.sleep(settings.AUTO_JOIN_CHECK_INTERVAL)
                 
         except KeyboardInterrupt:
-            logger.info("🛑 Scheduler stopped by user")
+            logger.info("[STOP] Scheduler stopped by user")
         except Exception as e:
-            logger.error(f"💥 Scheduler error: {str(e)}")
+            logger.error(f"[CRASH] Scheduler error: {str(e)}")
         finally:
             self.running = False
     
@@ -217,13 +217,13 @@ async def main():
     try:
         await scheduler.run()
     except KeyboardInterrupt:
-        print("\n🛑 Stopping auto-join scheduler...")
+        print("\n[STOP] Stopping auto-join scheduler...")
         scheduler.stop()
 
 if __name__ == "__main__":
-    print("🚀 Starting Simple Auto-Join Scheduler (Redis-free version)")
-    print("📝 This version doesn't require Redis/Celery")
-    print("⚠️  For production, use the full Celery version with Redis")
+    print("[START] Starting Simple Auto-Join Scheduler (Redis-free version)")
+    print("[INFO] This version doesn't require Redis/Celery")
+    print("[WARNING] For production, use the full Celery version with Redis")
     print("\nPress Ctrl+C to stop\n")
-    
+
     asyncio.run(main())

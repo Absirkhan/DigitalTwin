@@ -643,6 +643,419 @@ async def make_bot_respond(user_id: int, text: str):
 - Integration Fixes: [BACKEND_FRONTEND_FIXES.md](BACKEND_FRONTEND_FIXES.md)
 - OAuth Setup: [GOOGLE_OAUTH_UPDATE.md](GOOGLE_OAUTH_UPDATE.md)
 
+### Bot Response Tester - Offline Testing Endpoint
+
+**Overview:**
+The Bot Response Tester allows you to test the full bot response pipeline without joining actual meetings. This saves time during development and debugging by simulating the bot's behavior in a controlled environment.
+
+**Endpoint**: `POST /api/v1/rag/response-check`
+
+**Location**: [app/api/v1/endpoints/rag.py:399-718](app/api/v1/endpoints/rag.py#L399-L718)
+
+**Frontend Component**: [app/components/BotResponseTester.tsx](app/components/BotResponseTester.tsx)
+
+**Access**: http://localhost:3000/dashboard/rag → **Bot Response Tester** tab
+
+**Features:**
+- **Bot name detection** - Tests if query contains bot name
+- **Query extraction** - Removes bot name from query text
+- **Filler analysis** - Categorizes query (greeting, analytical, action, etc.)
+- **RAG context retrieval** - Shows what context is retrieved from FAISS
+- **LLM response generation** - Full Qwen2.5 inference
+- **Verbose backend logging** - Complete pipeline visibility in terminal
+- **Performance metrics** - Latency tracking for each stage
+
+**Request Example:**
+```json
+{
+  "trigger_text": "Hey Alice, what database did we choose?",
+  "bot_name": "Alice",
+  "simulate_filler": true,
+  "use_cache": true
+}
+```
+
+**Response Example:**
+```json
+{
+  "detected": true,
+  "detection_reason": "bot_name_match",
+  "extracted_query": "what database did we choose?",
+  "filler_category": "analytical",
+  "filler_text": "Let me check on that...",
+  "filler_latency_ms": 12.5,
+  "rag_context_items": 3,
+  "rag_retrieval_ms": 45.2,
+  "llm_response": "We chose PostgreSQL because it has excellent JSONB support.",
+  "llm_tokens": 67,
+  "llm_latency_ms": 3421.5,
+  "response_chunks": [...],
+  "total_pipeline_ms": 3479.2,
+  "perceived_latency_ms": 12.5
+}
+```
+
+**Backend Logging:**
+The endpoint provides detailed logs in the terminal for debugging:
+```
+================================================================================
+🧪 BOT RESPONSE CHECK - REQUEST RECEIVED
+================================================================================
+User ID: 4
+Trigger Text: 'Hey Alice, what database did we choose?'
+
+================================================================================
+🎯 STAGE 1: BOT NAME DETECTION
+================================================================================
+Bot Name: 'Alice'
+Detection: True
+Query: 'what database did we choose?'
+
+================================================================================
+🔍 RAG CONTEXT RETRIEVAL - SOURCES
+================================================================================
+Context Items Retrieved: 3
+Retrieval Time: 45ms
+
+📚 RETRIEVED CONTEXT:
+--------------------------------------------------------------------------------
+Absir: We should use PostgreSQL. The JSONB support is vital...
+Rihab: I agree with PostgreSQL. Great support for vector extensions...
+Ayna: Sounds good. Will we use Alembic for migrations?
+--------------------------------------------------------------------------------
+
+🎯 FULL PROMPT SENT TO LLM:
+--------------------------------------------------------------------------------
+<|im_start|>system
+You are a concise assistant...
+<|im_end|>
+<|im_start|>user
+Past information:
+Absir: We should use PostgreSQL...
+
+Question: what database did we choose?
+<|im_end|>
+<|im_start|>assistant
+--------------------------------------------------------------------------------
+
+💭 GENERATED RESPONSE:
+--------------------------------------------------------------------------------
+We chose PostgreSQL because it has excellent JSONB support.
+--------------------------------------------------------------------------------
+```
+
+**Use Cases:**
+1. **Query testing** - Test different phrasings to see bot responses
+2. **Context verification** - Check what FAISS retrieves for queries
+3. **LLM quality testing** - Verify response accuracy before production
+4. **Performance measurement** - Track pipeline latency
+5. **Filler debugging** - Ensure correct categorization
+
+**Testing:**
+```bash
+# Via frontend (recommended)
+http://localhost:3000/dashboard/rag → Bot Response Tester tab
+
+# Via API (curl)
+curl -X POST http://localhost:8000/api/v1/rag/response-check \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "trigger_text": "Hey Alice, what database did we choose?",
+    "bot_name": "Alice",
+    "simulate_filler": true
+  }'
+```
+
+**Documentation**: [BOT_RESPONSE_TESTER_GUIDE.md](BOT_RESPONSE_TESTER_GUIDE.md)
+
+---
+
+### Conversational Bot - Session Memory
+
+**Overview:**
+The bot now maintains conversation context across multiple turns using session memory, enabling natural follow-up questions and multi-turn conversations.
+
+**Session Memory Capacity**: Last 6 messages (3 user + 3 assistant turns)
+
+**Location**:
+- Memory Manager: [rag_module/rag/memory_manager.py](rag_module/rag/memory_manager.py)
+- Prompt Integration: [rag_module/rag/prompt_builder.py:233-255](rag_module/rag/prompt_builder.py#L233-L255)
+- Pipeline Orchestration: [rag_module/rag/pipeline.py:204](rag_module/rag/pipeline.py#L204)
+
+**How It Works:**
+
+1. **Session Initialization** - When user sends first query, session memory is created
+2. **Context Building** - Each query includes:
+   - **Recent conversation** (last 6 messages from current session)
+   - **Past information** (retrieved from FAISS long-term memory)
+   - **Current question**
+3. **Memory Management** - Oldest messages automatically dropped when limit reached (FIFO)
+4. **Session Lifecycle** - Memory cleared on session end or backend restart
+
+**Prompt Structure (3 Layers):**
+```
+<|im_start|>user
+Recent conversation:
+User: What database did we choose?
+Assistant: We chose PostgreSQL because it has excellent JSONB support.
+
+Past information:
+Absir: We should use PostgreSQL. The JSONB support is vital...
+
+Question: Why did we pick that one?
+<|im_end|>
+```
+
+**Conversational Capabilities:**
+- ✅ **Follow-up questions** - "Why?", "How?", "What about X?"
+- ✅ **Pronoun resolution** - "it", "that one", "the database"
+- ✅ **Multi-turn conversations** - 3+ turns with maintained context
+- ✅ **Topic switches** - Can switch topics and return to previous context
+- ✅ **Clarification requests** - "Can you explain more?"
+- ✅ **Reference to previous answers** - "You mentioned X, what about Y?"
+
+**Example Conversation:**
+```
+Turn 1:
+User: "What database did we choose?"
+Bot: "We chose PostgreSQL because it has excellent JSONB support."
+
+Turn 2 (Follow-up):
+User: "Why did we pick that one?"  ← Bot resolves "that one" → PostgreSQL
+Bot: "We picked PostgreSQL for its JSONB support for Recall.ai webhooks."
+
+Turn 3 (Context maintained):
+User: "What about the ORM?"
+Bot: "We're using SQLAlchemy as the ORM with PostgreSQL."
+```
+
+**Session Endpoints:**
+```bash
+# Clear session memory (keeps long-term FAISS data)
+DELETE /api/v1/rag/session
+Authorization: Bearer <token>
+```
+
+**Token Budget Allocation:**
+```
+Total: 2150 tokens
+- System prompt: 100-150 tokens
+- Session history: 50-150 tokens  ← NEW
+- Retrieved context: 200-400 tokens
+- User message: 50-150 tokens
+- Response buffer: 1000 tokens
+```
+
+**Testing Conversational Flow:**
+```bash
+# Query 1
+POST /api/v1/rag/query
+{"message": "What database did we choose?"}
+# Response: "We chose PostgreSQL..."
+
+# Query 2 (Follow-up - same session)
+POST /api/v1/rag/query
+{"message": "Why did we pick that one?"}
+# Response: Should resolve "that one" → PostgreSQL ✓
+
+# Query 3 (Multi-turn)
+POST /api/v1/rag/query
+{"message": "What about the ORM?"}
+# Response: "We're using SQLAlchemy..." ✓
+```
+
+**Documentation**: [BOT_CONVERSATIONAL_CONTEXT.md](BOT_CONVERSATIONAL_CONTEXT.md), [CONVERSATIONAL_FIX_APPLIED.md](CONVERSATIONAL_FIX_APPLIED.md)
+
+---
+
+### RAG Storage & Retrieval Fixes
+
+**Issues Fixed:**
+1. **FAISS index missing** - Context retrieval returned 0 results
+2. **Incorrect metadata format** - Array vs dictionary mismatch
+3. **Transcript data generation** - Tools for populating knowledge base
+
+**Root Causes:**
+- Converter script saved metadata as JSON array instead of dictionary
+- FAISS index not generated even though metadata existed
+- No easy way to generate realistic test data
+
+**Solutions Applied:**
+
+**1. FAISS Index Generation** ([fix_user4_data.py](fix_user4_data.py))
+```python
+# Regenerate FAISS index from existing metadata
+python fix_user4_data.py
+```
+- Loads existing metadata.json
+- Stores each exchange through RAG pipeline
+- Generates proper FAISS embeddings
+- Creates user profile
+
+**2. Transcript Converter** ([convert_transcript_to_rag.py](convert_transcript_to_rag.py))
+```python
+# Convert Gemini-generated transcript to RAG format
+python convert_transcript_to_rag.py generated_transcript.json 4
+```
+- Accepts Gemini Pro generated JSON
+- Stores exchanges via RAG pipeline
+- Generates FAISS index + embeddings
+- Creates user profile automatically
+
+**3. Data Verification** ([check_rag_data.py](check_rag_data.py))
+```python
+# Verify all user data integrity
+python check_rag_data.py
+```
+- Scans all user directories
+- Checks for corrupted metadata
+- Identifies missing FAISS indexes
+- Reports data quality issues
+
+**4. Transcript Generation with Gemini Pro**
+
+**Prompt Template**: [GEMINI_TRANSCRIPT_GENERATION_PROMPT.md](GEMINI_TRANSCRIPT_GENERATION_PROMPT.md)
+
+**Workflow:**
+1. Copy prompt from `GEMINI_TRANSCRIPT_GENERATION_PROMPT.md`
+2. Paste to Gemini Pro (https://gemini.google.com/)
+3. Gemini generates 50-70 realistic exchanges
+4. Save output as `generated_transcript.json`
+5. Run converter: `python convert_transcript_to_rag.py generated_transcript.json 4`
+6. Test retrieval at http://localhost:3000/dashboard/rag
+
+**Generated Transcript Format:**
+```json
+[
+  {
+    "speaker": "Absir",
+    "text": "Hey team, let's discuss our database choice. I've been thinking PostgreSQL...",
+    "timestamp": "2026-04-10T10:00:00"
+  },
+  {
+    "speaker": "Rihab",
+    "text": "I agree with PostgreSQL. Plus, it has great support for vector extensions...",
+    "timestamp": "2026-04-10T10:00:15"
+  }
+]
+```
+
+**Topics Covered in Generated Data:**
+- Database architecture (PostgreSQL, SQLAlchemy, Alembic)
+- Real-time transcription (WebSocket, Redis pub/sub)
+- RAG system design (FAISS, token budget)
+- LLM integration issues (hallucinations, prompt fixes)
+- TTS voice cloning (NeuTTS, caching)
+- Recent bug fixes (RAG storage, filler categorization)
+- Frontend challenges (Next.js, TypeScript)
+- Deployment & testing
+
+**Verification:**
+```bash
+# 1. Check data integrity
+python check_rag_data.py
+
+# 2. Test retrieval
+http://localhost:3000/dashboard/rag → Bot Response Tester
+
+# 3. Try queries
+"What database did we choose?"
+"How did we fix the RAG bug?"
+"Tell me about the TTS caching strategy"
+```
+
+**Documentation**:
+- [RAG_FIX_COMPLETE.md](RAG_FIX_COMPLETE.md) - FAISS index fix
+- [RAG_STORAGE_FIX_SUMMARY.md](RAG_STORAGE_FIX_SUMMARY.md) - Technical summary
+- [GENERATE_TRANSCRIPT_DATA_GUIDE.md](GENERATE_TRANSCRIPT_DATA_GUIDE.md) - Gemini workflow
+- [FIX_VERIFICATION_QUICKSTART.md](FIX_VERIFICATION_QUICKSTART.md) - Quick testing guide
+
+---
+
+### Filler & LLM Response Fixes
+
+**Issues Fixed:**
+1. **Greeting false positives** - "tell me about the TTS" categorized as greeting
+2. **Colon prefix in responses** - All LLM outputs started with ": "
+
+**1. Filler Categorization Fix**
+
+**Problem**: Substring matching caused false positives
+```python
+# BEFORE (buggy)
+is_greeting = any(kw in query_lower for kw in self.GREETING_KEYWORDS)
+# "the" in "tell me about THE TTS" matched greeting keyword
+```
+
+**Solution**: Word boundary regex matching
+```python
+# AFTER (fixed)
+import re
+is_greeting = any(re.search(r'\b' + re.escape(kw) + r'\b', query_lower)
+                  for kw in self.GREETING_KEYWORDS)
+```
+
+**Location**: [app/services/filler_audio_injector.py:300-303](app/services/filler_audio_injector.py#L300-L303)
+
+**Impact**:
+- ✅ "tell me about the TTS" → **analytical** (correct)
+- ✅ "hello" → **greeting** (still works)
+- ✅ "goodbye" → **goodbye** (still works)
+
+**2. LLM Response Colon Fix**
+
+**Problem**: ChatML format caused leading colons
+```python
+# Prompt ends with:
+<|im_start|>assistant
+# Model thinks it needs:
+<|im_start|>assistant: response text
+# So it outputs: ": response text"
+```
+
+**Solution**: Strip leading colons from responses
+```python
+# Non-streaming (llm_generator.py:233-235)
+response_text = output['choices'][0]['text'].strip()
+if response_text.startswith(':'):
+    response_text = response_text[1:].strip()
+
+# Streaming - first token only (llm_generator.py:363-371)
+if first_token and token.lstrip().startswith(':'):
+    token = token.lstrip()
+    if token.startswith(':'):
+        token = token[1:].lstrip()
+    first_token = False
+```
+
+**Location**: [rag_module/rag/llm_generator.py](rag_module/rag/llm_generator.py)
+- Lines 233-235: Non-streaming fix
+- Lines 314-317: Cached streaming fix
+- Lines 363-371: Live streaming fix
+
+**Impact**:
+- ✅ Before: `: We chose PostgreSQL...`
+- ✅ After: `We chose PostgreSQL...`
+- ✅ Preserves legitimate colons in content: `"topics: database, API"`
+
+**Testing:**
+```bash
+# Test filler categorization
+POST /api/v1/rag/response-check
+{"trigger_text": "Hey Alice, tell me about the TTS caching strategy"}
+# Expected: filler_category = "analytical" (NOT "greeting")
+
+# Test LLM responses
+POST /api/v1/rag/query
+{"message": "What database did we choose?"}
+# Expected: "We chose PostgreSQL..." (NO leading colon)
+```
+
+**Documentation**: [FILLER_AND_LLM_FIXES.md](FILLER_AND_LLM_FIXES.md)
+
+---
+
 ## Configuration
 
 All config via environment variables (`.env` file):
@@ -818,6 +1231,27 @@ async def list_meetings(
 - `FIXES_APPLIED.md` - Backend startup fixes
 - `temporary/README_INFERENCE.md` - Local FLAN-T5 model inference guide
 
+**RAG/LLM Integration Guides:**
+- `BOT_RESPONSE_TESTER_GUIDE.md` - Bot Response Tester usage and features
+- `BOT_CONVERSATIONAL_CONTEXT.md` - Conversational capability documentation
+- `CONVERSATIONAL_FIX_APPLIED.md` - Session memory implementation details
+- `RAG_FIX_COMPLETE.md` - FAISS index generation fix
+- `RAG_STORAGE_FIX_SUMMARY.md` - Technical summary of storage fixes
+- `GENERATE_TRANSCRIPT_DATA_GUIDE.md` - Gemini Pro transcript generation workflow
+- `GEMINI_TRANSCRIPT_GENERATION_PROMPT.md` - Prompt template for Gemini
+- `FIX_VERIFICATION_QUICKSTART.md` - Quick testing guide for RAG fixes
+- `FILLER_AND_LLM_FIXES.md` - Greeting categorization and colon prefix fixes
+- `rag_module/LLM_INTEGRATION.md` - Complete LLM integration guide
+- `rag_module/QUICKSTART_LLM.md` - Quick start for LLM features
+- `rag_module/QWEN_OPTIMIZATION_FIXES.md` - Prompt engineering optimizations
+- `rag_module/OPTIMIZATION_SUMMARY.md` - Overall optimization report
+
+**Utility Scripts:**
+- `fix_user4_data.py` - Regenerate FAISS index from existing metadata
+- `convert_transcript_to_rag.py` - Convert Gemini JSON to RAG format
+- `check_rag_data.py` - Verify RAG data integrity
+- `regenerate_faiss_index.py` - Manual FAISS index regeneration
+
 API docs auto-generated at http://localhost:8000/docs (Swagger UI).
 
 ## Git Workflow
@@ -865,7 +1299,13 @@ API docs auto-generated at http://localhost:8000/docs (Swagger UI).
 - RAG module with LLM integration (Qwen2.5-0.5B-Instruct)
 - Prompt engineering optimizations (83% accuracy, 400% improvement)
 - Automatic meeting transcript storage in RAG
-- See main CLAUDE.md for complete RAG/LLM documentation
+- **Conversational bot capability** with session memory (last 6 messages)
+- **Bot Response Tester** endpoint for offline testing
+- **RAG storage fixes** (FAISS index generation)
+- **Filler categorization fixes** (word boundary matching)
+- **LLM response formatting** (colon prefix removal)
+- Transcript data generation with Gemini Pro
+- See sections below for complete feature documentation
 
 **When committing:**
 - Keep feature work in feature branches

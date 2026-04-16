@@ -229,6 +229,11 @@ class LLMGenerator:
 
             # Extract response
             response_text = output['choices'][0]['text'].strip()
+
+            # Remove leading colon and whitespace (model sometimes starts with ": " due to ChatML format)
+            if response_text.startswith(':'):
+                response_text = response_text[1:].strip()
+
             tokens_generated = output['usage']['completion_tokens']
 
             # Calculate latency
@@ -306,9 +311,14 @@ class LLMGenerator:
             cached_result = self.cache.get_cached_response(prompt)
             if cached_result:
                 # Cache hit - return full response immediately
+                response = cached_result['response']
+                # Remove leading colon if present (cached responses should already be clean, but just in case)
+                if response.startswith(':'):
+                    response = response[1:].strip()
+
                 yield {
                     "type": "token",
-                    "content": cached_result['response']
+                    "content": response
                 }
                 yield {
                     "type": "done",
@@ -327,6 +337,7 @@ class LLMGenerator:
         start_time = time.time()
         full_response = ""
         tokens_generated = 0
+        first_token = True
 
         try:
             # Create streaming completion
@@ -348,6 +359,21 @@ class LLMGenerator:
                     choice = output['choices'][0]
                     if 'text' in choice:
                         token = choice['text']
+
+                        # Remove leading colon from first token only
+                        if first_token and token.lstrip().startswith(':'):
+                            # Strip leading whitespace and colon
+                            token = token.lstrip()
+                            if token.startswith(':'):
+                                token = token[1:].lstrip()
+                            first_token = False
+                        elif first_token:
+                            first_token = False
+
+                        # Skip if token is now empty after stripping
+                        if not token:
+                            continue
+
                         full_response += token
                         tokens_generated += 1
 

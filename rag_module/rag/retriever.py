@@ -207,17 +207,23 @@ class ContextRetriever:
 
         formatted_parts = []
         for result in results:
-            # Format header with rank and similarity
-            header = f"[Past Exchange {result['rank']} - Similarity: {result['similarity_score']:.2f}]"
+            # Ultra-minimal format for 0.5B models - just the content, no structure
+            # Remove any speaker names from the text (like "Absir:", "Bot:", etc.)
+            user_text = result['user_text']
+            assistant_text = result['assistant_text']
 
-            # Format exchange text
-            exchange_text = f"User: {result['user_text']}\nAssistant: {result['assistant_text']}"
+            # Strip speaker names if present (format: "Name: text")
+            if ':' in user_text and user_text.index(':') < 20:
+                user_text = user_text.split(':', 1)[1].strip()
+            if ':' in assistant_text and assistant_text.index(':') < 20:
+                assistant_text = assistant_text.split(':', 1)[1].strip()
 
-            # Combine header and text
-            formatted_parts.append(f"{header}\n{exchange_text}")
+            # Just include the assistant's response (the factual answer)
+            # Don't include "User:" labels that the LLM might echo
+            formatted_parts.append(assistant_text)
 
-        # Join all exchanges with blank lines
-        return "\n\n".join(formatted_parts)
+        # Join with simple separator
+        return " ".join(formatted_parts)
 
     def measure_retrieval_latency(
         self,

@@ -6,6 +6,7 @@ import { meetingService, summarizationService, getAuthToken } from '@/lib/api';
 import type { Meeting, FormattedTranscript, SummarizationResponse, MeetingUpdate } from '@/lib/api/types';
 import { FormattedSummaryDisplay } from '@/app/components/FormattedSummaryDisplay';
 import RealtimeTranscript from '@/app/components/RealtimeTranscript';
+import BotResponseHistory from '@/app/components/BotResponseHistory';
 
 export default function MeetingDetailPage() {
   const params = useParams();
@@ -445,6 +446,12 @@ export default function MeetingDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Bot Response History Section */}
+      <BotResponseHistory
+        meetingId={meetingId}
+        onEmergencyDisable={() => loadMeeting()}
+      />
 
       {/* Real-Time Transcript Section */}
       {meeting.status === 'in_progress' && (

@@ -20,6 +20,7 @@ class User(Base):
     bot_name = Column(String)
     enable_backend_tasks = Column(Boolean, default=True)
     has_voice_profile = Column(Boolean, default=False, nullable=False)
+    enable_bot_speaking = Column(Boolean, default=True, nullable=False)  # Enabled by default, user can toggle off in UI
 
     # OAuth tokens stored as JSON
     oauth_tokens = Column(JSON)

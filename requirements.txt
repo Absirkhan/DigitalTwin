@@ -47,10 +47,10 @@ llama-cpp-python              # LLM inference for RAG response generation (GGUF 
 # TTS Voice Cloning Dependencies
 soundfile>=0.12.1             # Audio file I/O for WAV export
 
-# NeuTTS Nano - Voice Cloning (Manual Installation Required)
-# Install manually using the following commands:
-#   1. git clone https://github.com/neuphonic/neutts.git
-#   2. pip install -e ./neutts
-#   3. pip install llama-cpp-python
-# Note: NeuTTS uses llama-cpp-python for GGUF model support
-# See SETUP_TTS.md for complete installation instructions including espeak-ng setup
+# Piper TTS (ultra-fast CPU synthesis)
+piper-tts>=1.2.0
+
+# Audio processing
+pydub>=0.25.1
+
+

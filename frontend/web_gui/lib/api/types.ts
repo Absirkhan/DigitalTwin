@@ -56,6 +56,10 @@ export interface Meeting {
   updated_at?: string;
   bot_id?: string;  // Recall bot ID if meeting has been joined
   auto_join?: boolean;  // Auto-join setting for the meeting
+  bot_response_enabled?: boolean;  // Bot speaking enabled
+  bot_response_style?: string;  // Response style (professional, casual, technical, brief)
+  bot_response_count?: number;  // Number of responses given
+  bot_max_responses?: number;  // Maximum responses allowed
 }
 
 export interface MeetingCreate {
@@ -66,6 +70,9 @@ export interface MeetingCreate {
   scheduled_time: string;  // ISO date string
   duration_minutes?: number;
   auto_join?: boolean;
+  bot_response_enabled?: boolean;
+  bot_response_style?: string;
+  bot_max_responses?: number;
 }
 
 export interface MeetingUpdate {

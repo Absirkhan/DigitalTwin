@@ -232,19 +232,6 @@ async def receive_recall_webhook(
         # ===== PHASE 1: Parse Webhook Payload =====
         payload = await request.json()
 
-        print("\n" + "="*80)
-        print("📥 RECALL.AI WEBHOOK RECEIVED")
-        print("="*80)
-        print(f"📦 Full Payload:")
-        import json as json_lib
-        print(json_lib.dumps(payload, indent=2))
-        print("="*80 + "\n")
-
-        # Validate signature if Recall.ai provides one (optional security)
-        # TODO: Implement signature validation when Recall.ai provides webhook secret
-        # if x_recall_signature:
-        #     verify_recall_signature(payload, x_recall_signature)
-
         # Extract event type - ACTUAL Recall.ai structure uses "event" not "event_type"
         event_type = payload.get("event") or payload.get("event_type")
 
@@ -316,12 +303,6 @@ async def receive_recall_webhook(
             else:
                 timestamp = asyncio.get_event_loop().time()
 
-            print(f"\n📝 PARSED TRANSCRIPT DATA:")
-            print(f"   Speaker: {speaker_name}")
-            print(f"   Text: {text}")
-            print(f"   Timestamp: {timestamp}")
-            print(f"   Words count: {len(words_data)}\n")
-
             # Create transcript chunk
             chunk = RealtimeTranscriptChunk(
                 meeting_id=meeting_id,
@@ -339,10 +320,14 @@ async def receive_recall_webhook(
                 chunk_data=chunk.model_dump()
             )
 
-            logger.info(
+            logger.debug(
                 f"📤 Published transcript chunk: meeting={meeting_id}, "
                 f"speaker={chunk.speaker}, text='{text[:50]}...'"
             )
+
+            # ===== PHASE 4.5: Check if Bot Should Respond (Bot Speaking) =====
+            # Do NOT block webhook response - this is a fire-and-forget background task
+            await _check_bot_speaking(bot, meeting_id, chunk, db)
 
             # ===== PHASE 5: Background Task - Store in Database =====
             # Do NOT block webhook response for database writes
@@ -376,10 +361,6 @@ async def _handle_bot_status_change(bot_id: str, payload: dict, db: AsyncSession
     Updates meeting status when bot joins/leaves.
     """
     try:
-        print(f"\n🔔 BOT STATUS CHANGE EVENT")
-        print(f"Bot ID: {bot_id}")
-        print(f"Payload: {payload}")
-
         from sqlalchemy import select
         from datetime import datetime
 
@@ -395,9 +376,6 @@ async def _handle_bot_status_change(bot_id: str, payload: dict, db: AsyncSession
 
         # Extract status from payload
         bot_status = payload.get("data", {}).get("status") or payload.get("status")
-
-        print(f"Bot Status: {bot_status}")
-        print(f"Bot Meeting ID: {bot.meeting_id}")
 
         # Update bot status
         if bot_status:
@@ -418,8 +396,7 @@ async def _handle_bot_status_change(bot_id: str, payload: dict, db: AsyncSession
                     # Set start_time if not already set
                     if not meeting.start_time:
                         meeting.start_time = datetime.utcnow()
-                    print(f"✅ Meeting {meeting.id} status → in_progress (started at {meeting.start_time})")
-                    logger.info(f"Meeting {meeting.id} marked as in_progress")
+                    logger.info(f"✅ Meeting {meeting.id} status → in_progress")
 
                 # Bot left/done → Meeting is completed
                 elif bot_status in ["done", "failed", "fatal", "analysis_done"]:
@@ -428,17 +405,97 @@ async def _handle_bot_status_change(bot_id: str, payload: dict, db: AsyncSession
                     # Set end_time when meeting completes
                     if not meeting.end_time:
                         meeting.end_time = datetime.utcnow()
-                    print(f"✅ Meeting {meeting.id} status: {old_status} → completed (ended at {meeting.end_time})")
-                    logger.info(f"Meeting {meeting.id} marked as completed. Bot status: {bot_status}")
+                    logger.info(f"✅ Meeting {meeting.id} status: {old_status} → completed")
 
                 meeting.updated_at = datetime.utcnow()
 
         await db.commit()
-        print(f"✅ Bot status updated successfully\n")
 
     except Exception as e:
         logger.error(f"❌ Error handling bot status change: {e}", exc_info=True)
         await db.rollback()
+
+
+async def _check_bot_speaking(bot: Bot, meeting_id: int, chunk: RealtimeTranscriptChunk, db: AsyncSession):
+    """
+    Check if bot should respond to this transcript chunk.
+
+    This is called after publishing to Redis, as a non-blocking check.
+    If bot should respond, queues a background task for response generation.
+
+    Args:
+        bot: Bot instance
+        meeting_id: ID of the meeting
+        chunk: Transcript chunk received
+        db: Database session
+    """
+    try:
+        print(f"\n🔍 _check_bot_speaking CALLED: meeting={meeting_id}, text='{chunk.text}'")
+
+        # Import here to avoid circular dependencies
+        from app.services.optimized_bot_response_pipeline import check_and_respond_if_addressed
+        from sqlalchemy import select
+
+        # Get meeting to check bot speaking settings
+        result = await db.execute(
+            select(Meeting).filter(Meeting.id == meeting_id)
+        )
+        meeting = result.scalar_one_or_none()
+
+        if not meeting:
+            print(f"❌ EARLY RETURN: Meeting {meeting_id} not found")
+            return
+
+        # Check if bot speaking is enabled globally for user
+        result = await db.execute(
+            select(User).filter(User.id == bot.user_id)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            print(f"❌ EARLY RETURN: User {bot.user_id} not found")
+            return
+
+        if not user.enable_bot_speaking:
+            print(f"❌ EARLY RETURN: Bot speaking disabled globally for user {bot.user_id} (enable_bot_speaking={user.enable_bot_speaking})")
+            return
+
+        # Check if bot speaking is enabled for this meeting
+        if not meeting.bot_response_enabled:
+            print(f"❌ EARLY RETURN: Bot speaking disabled for meeting {meeting_id} (bot_response_enabled={meeting.bot_response_enabled})")
+            return
+
+        # Check if meeting is in progress
+        if meeting.status != "in_progress":
+            print(f"❌ EARLY RETURN: Meeting {meeting_id} not in progress (status={meeting.status})")
+            return
+
+        # Get bot name (from meeting or user)
+        bot_name = meeting.bot_name or user.bot_name or "Digital Twin"
+
+        print(f"✅ ALL CHECKS PASSED! bot_name='{bot_name}', speaker='{chunk.speaker}'")
+
+        logger.info(
+            f"🔍 Bot speaking check: meeting={meeting_id}, bot_name='{bot_name}', "
+            f"speaker='{chunk.speaker}', text='{chunk.text[:80]}'"
+        )
+
+        # Check and respond if addressed (non-blocking background task)
+        await check_and_respond_if_addressed(
+            meeting_id=meeting_id,
+            bot_id=bot.bot_id,
+            user_id=bot.user_id,
+            chunk_text=chunk.text,
+            chunk_speaker=chunk.speaker,
+            bot_name=bot_name,
+            response_style=meeting.bot_response_style,
+            max_responses=meeting.bot_max_responses
+        )
+
+    except Exception as e:
+        # Don't fail the webhook if bot speaking check fails
+        print(f"❌ EXCEPTION in _check_bot_speaking: {e}")
+        logger.error(f"❌ Error in bot speaking check: {e}", exc_info=True)
 
 
 async def _store_transcript_chunk(
